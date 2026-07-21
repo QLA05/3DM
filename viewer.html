@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>骨骼3D预览</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { overflow: hidden; }
+        #toolbar {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+        }
+        #partBar{
+            position: fixed;
+            bottom:0;
+            left:0;
+            width:100%;
+            z-index:10;
+            background:#eee;
+            padding:8px;
+            display:flex;
+            gap:6px;
+            flex-wrap:wrap;
+            max-height:150px;
+            overflow-y:auto;
+        }
+        button {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 4px;
+            background: #28a745;
+            color: white;
+            cursor: pointer;
+        }
+        button:nth-child(2){ background:#007bff; }
+        button:nth-child(3){ background:#17a2b8; }
+        button:nth-child(4){ background:#6c757d; }
+        button:nth-child(5){ background:#9933cc; }
+        button:nth-child(6){ background:#ff6600; }
+        .partBtn{
+            background:#666;
+            font-size:12px;
+            padding:5px 8px;
+        }
+        #fileInput { display: none; }
+        /* 二维码弹窗 */
+        #qrModal{
+            display:none;
+            position:fixed;
+            top:0;left:0;
+            width:100%;height:100%;
+            background:rgba(0,0,0,0.6);
+            z-index:999;
+            align-items:center;
+            justify-content:center;
+        }
+        #qrBox{
+            background:#fff;
+            padding:20px;
+            text-align:center;
+        }
+        #closeQr{
+            margin-top:10px;
+            background:#999;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <button id="uploadBtn">上传本地GLB/GLTF模型</button>
+        <button id="resetView">复位视角</button>
+        <button id="toggleAllBtn">隐藏</button>
+        <button id="rotateBtn">播放</button>
+        <button id="qrBtn">生成访问二维码</button>
+    </div>
+    <!-- 二维码弹窗 -->
+    <div id="qrModal">
+        <div id="qrBox">
+            <canvas id="qrCanvas"></canvas>
+            <div>手机连同一WiFi扫码访问页面</div>
+            <button id="closeQr">关闭</button>
+        </div>
+    </div>
+    <div id="partBar"></div>
+    <input type="file" id="fileInput" accept=".glb,.gltf">
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf5f5f5); // 画布底色调亮一点
+        const partBar = document.getElementById('partBar');
+        let partBtnMap = new Map();
+        let rotatePlaying = false;
+        const rotateSpeed = 0.3;
+        let allVisible = true;
+
+        const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 10000);
+        camera.position.set(8, 8, 8);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(innerWidth, innerHeight);
+        renderer.setPixelRatio(devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.outputColorSpace = THREE.SRGBColorSpace; // 色彩标准提亮
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.5; // 全局曝光提亮，解决整体发暗
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // ========== 全新增强打光部分（重点提亮） ==========
+        // 1. 高强度环境光，消除模型死角黑面
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+        scene.add(ambientLight);
+
+        // 2. 主定向强光（正面主光源）
+        const mainDirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        mainDirLight.position.set(12, 24, 16);
+        mainDirLight.castShadow = true;
+        scene.add(mainDirLight);
+
+        // 3. 辅光1：左侧补光，消除左侧阴影
+        const fillLightLeft = new THREE.DirectionalLight(0xe8f4ff, 0.6);
+        fillLightLeft.position.set(-10, 12, 8);
+        scene.add(fillLightLeft);
+
+        // 4. 辅光2：右侧底部补光，底部暗面提亮
+        const fillLightBottom = new THREE.DirectionalLight(0xfff8e8, 0.5);
+        fillLightBottom.position.set(6, -6, 12);
+        scene.add(fillLightBottom);
+
+        // 5. 顶部柔光，提升整体通透感
+        const topLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        topLight.position.set(0, 30, 0);
+        scene.add(topLight);
+        // =================================================
+
+        const loader = new GLTFLoader();
+        let currentModel = null;
+
+        function fitCameraToObject(obj) {
+            const box = new THREE.Box3().setFromObject(obj);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxSide = Math.max(size.x, size.y, size.z);
+
+            const camOffset = maxSide * 1.8;
+            camera.position.copy(center).add(new THREE.Vector3(camOffset, camOffset, camOffset));
+            camera.lookAt(center);
+            controls.target.copy(center);
+            controls.update();
+        }
+
+        function buildPartButtons(model){
+            partBar.innerHTML='';
+            partBtnMap.clear();
+            model.traverse(child=>{
+                if(child.name && child.name.trim()!==''){
+                    const btn=document.createElement('button');
+                    btn.className='partBtn';
+                    btn.textContent=child.name;
+                    btn.onclick=()=>{
+                        child.visible=!child.visible;
+                        btn.style.background=child.visible?'#666':'#dc3545';
+                    }
+                    partBtnMap.set(child,btn);
+                    partBar.appendChild(btn);
+                }
+            })
+        }
+
+        // 全局显示/隐藏切换
+        const toggleAllBtn = document.getElementById('toggleAllBtn');
+        toggleAllBtn.onclick = () => {
+            if (!currentModel) return;
+            allVisible = !allVisible;
+            if(allVisible){
+                currentModel.traverse(child => child.visible = true);
+                partBtnMap.forEach(btn=>btn.style.background='#666');
+                toggleAllBtn.textContent = '隐藏';
+            }else{
+                currentModel.traverse(child => child.visible = false);
+                partBtnMap.forEach(btn=>btn.style.background='#dc3545');
+                toggleAllBtn.textContent = '显示';
+            }
+        }
+
+        // 旋转按钮
+        const rotateBtn = document.getElementById('rotateBtn');
+        rotateBtn.onclick = ()=>{
+            if(!currentModel){
+                alert('请先上传模型');
+                return;
+            }
+            rotatePlaying = !rotatePlaying;
+            rotateBtn.textContent = rotatePlaying ? '暂停' : '播放';
+        }
+
+        // 二维码弹窗逻辑
+        const qrBtn = document.getElementById('qrBtn');
+        const qrModal = document.getElementById('qrModal');
+        const qrCanvas = document.getElementById('qrCanvas');
+        const closeQr = document.getElementById('closeQr');
+        qrBtn.onclick = ()=>{
+            const pageUrl = window.location.href;
+            qrModal.style.display = 'flex';
+            QRCode.toCanvas(qrCanvas, pageUrl, { width:240 }, err=>{
+                if(err) console.error(err);
+            })
+        }
+        closeQr.onclick = ()=> qrModal.style.display = 'none';
+
+        // 上传模型
+        const uploadBtn = document.getElementById('uploadBtn');
+        const fileInput = document.getElementById('fileInput');
+        uploadBtn.onclick = () => fileInput.click();
+        fileInput.onchange = e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const url = URL.createObjectURL(file);
+            rotatePlaying = false;
+            rotateBtn.textContent = '播放';
+            allVisible = true;
+            toggleAllBtn.textContent = '隐藏';
+
+            if (currentModel) scene.remove(currentModel);
+
+            loader.load(url, gltf => {
+                currentModel = gltf.scene;
+                currentModel.traverse(child => child.visible = true);
+                scene.add(currentModel);
+                fitCameraToObject(currentModel);
+                buildPartButtons(currentModel);
+                URL.revokeObjectURL(url);
+                console.log('模型加载完成');
+            },
+            (progress)=>{
+                console.log('加载进度', progress.loaded/progress.total);
+            },
+            err => console.error('加载失败', err));
+        };
+
+        document.getElementById('resetView').onclick = () => {
+            if (currentModel) fitCameraToObject(currentModel);
+        }
+
+        function renderLoop() {
+            requestAnimationFrame(renderLoop);
+            if(rotatePlaying && currentModel){
+                currentModel.rotation.y += rotateSpeed * 0.016;
+            }
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        renderLoop();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = innerWidth / innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(innerWidth, innerHeight);
+        })
+    </script>
+</body>
+</html>

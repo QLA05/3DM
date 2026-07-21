@@ -3,6 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title>骨骼3D预览</title>
+    <!-- 新增登录权限拦截脚本，最先执行 -->
+    <script>
+        if (sessionStorage.getItem('isLogin') !== 'true') {
+            alert("请先登录系统");
+            window.location.href = "./index.html";
+        }
+    </script>
+
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -82,7 +90,7 @@
     <div id="qrModal">
         <div id="qrBox">
             <canvas id="qrCanvas"></canvas>
-            <div>手机连同一WiFi扫码访问页面</div>
+            <div>手机扫码访问页面</div>
             <button id="closeQr">关闭</button>
         </div>
     </div>

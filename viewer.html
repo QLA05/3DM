@@ -86,7 +86,7 @@
         <button id="toggleAllBtn">隐藏</button>
         <button id="rotateBtn">旋转</button>
         <button id="qrBtn">生成访问二维码</button>
-        <button id="playAnimBtn">播放/暂停动画</button>
+        <button id="playAnimBtn">播放动画</button>
     </div>
     <!-- 二维码弹窗 -->
     <div id="qrModal">
@@ -247,7 +247,7 @@
             } else {
                 mixer.stopAllAction();
                 isAnimPlaying = false;
-                this.innerText = '播放/暂停动画';
+                this.innerText = '播放动画';
             }
         })
 
@@ -282,7 +282,7 @@
             animationClips = [];
             isAnimPlaying = false;
             currentAction = null;
-            playAnimBtn.innerText = '播放/暂停动画';
+            playAnimBtn.innerText = '播放动画';
 
             if (currentModel) scene.remove(currentModel);
 

@@ -50,6 +50,7 @@
         button:nth-child(4){ background:#6c757d; }
         button:nth-child(5){ background:#9933cc; }
         button:nth-child(6){ background:#ff6600; }
+        button:nth-child(7){ background:#c82333; }
         .partBtn{
             background:#666;
             font-size:12px;
@@ -83,8 +84,9 @@
         <button id="uploadBtn">上传本地GLB/GLTF模型</button>
         <button id="resetView">复位视角</button>
         <button id="toggleAllBtn">隐藏</button>
-        <button id="rotateBtn">播放</button>
+        <button id="rotateBtn">旋转</button>
         <button id="qrBtn">生成访问二维码</button>
+        <button id="playAnimBtn">播放/暂停动画</button>
     </div>
     <!-- 二维码弹窗 -->
     <div id="qrModal">
@@ -117,6 +119,13 @@
         let rotatePlaying = false;
         const rotateSpeed = 0.3;
         let allVisible = true;
+
+        // 动画相关全局变量
+        let mixer = null;
+        let animationClips = [];
+        let isAnimPlaying = false;
+        const clock = new THREE.Clock();
+        let currentAction = null;
 
         const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 10000);
         camera.position.set(8, 8, 8);
@@ -219,8 +228,28 @@
                 return;
             }
             rotatePlaying = !rotatePlaying;
-            rotateBtn.textContent = rotatePlaying ? '暂停' : '播放';
+            rotateBtn.textContent = rotatePlaying ? '暂停' : '旋转';
         }
+
+        // 动画播放按钮逻辑
+        const playAnimBtn = document.getElementById('playAnimBtn');
+        playAnimBtn.addEventListener('click', function () {
+            if (!mixer || animationClips.length === 0) {
+                alert('当前GLB模型不含内置动画');
+                return;
+            }
+            if (!isAnimPlaying) {
+                currentAction = mixer.clipAction(animationClips[0]);
+                currentAction.setLoop(THREE.LoopRepeat);
+                currentAction.play();
+                isAnimPlaying = true;
+                this.innerText = '暂停动画';
+            } else {
+                mixer.stopAllActions();
+                isAnimPlaying = false;
+                this.innerText = '播放/暂停动画';
+            }
+        })
 
         // 二维码弹窗逻辑
         const qrBtn = document.getElementById('qrBtn');
@@ -245,15 +274,26 @@
             if (!file) return;
             const url = URL.createObjectURL(file);
             rotatePlaying = false;
-            rotateBtn.textContent = '播放';
+            rotateBtn.textContent = '旋转';
             allVisible = true;
             toggleAllBtn.textContent = '隐藏';
+            // 重置旧动画状态
+            mixer = null;
+            animationClips = [];
+            isAnimPlaying = false;
+            currentAction = null;
+            playAnimBtn.innerText = '播放/暂停动画';
 
             if (currentModel) scene.remove(currentModel);
 
             loader.load(url, gltf => {
                 currentModel = gltf.scene;
                 currentModel.traverse(child => child.visible = true);
+                // 读取模型动画
+                animationClips = gltf.animations;
+                if(animationClips.length > 0){
+                    mixer = new THREE.AnimationMixer(currentModel);
+                }
                 scene.add(currentModel);
                 fitCameraToObject(currentModel);
                 buildPartButtons(currentModel);
@@ -272,8 +312,13 @@
 
         function renderLoop() {
             requestAnimationFrame(renderLoop);
+            const delta = clock.getDelta();
             if(rotatePlaying && currentModel){
                 currentModel.rotation.y += rotateSpeed * 0.016;
+            }
+            // 更新动画
+            if(mixer && isAnimPlaying){
+                mixer.update(delta);
             }
             controls.update();
             renderer.render(scene, camera);

@@ -245,7 +245,7 @@
                 isAnimPlaying = true;
                 this.innerText = '暂停动画';
             } else {
-                mixer.stopAllAction();
+                currentAction.pause();
                 isAnimPlaying = false;
                 this.innerText = '播放动画';
             }

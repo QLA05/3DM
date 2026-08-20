@@ -10,6 +10,8 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <!-- dicom‑parser UMD全局版本，导出 window.dicomParser -->
+    <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { overflow: hidden; }
@@ -116,23 +118,22 @@
     {
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/",
-            "dicom-parser":"https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicom-parser.esm.js"
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
         }
     }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import dicomParser from 'dicom-parser';
+        // 从全局window拿dicomParser，不再import
+        const dicomParser = window.dicomParser;
 
         // 简易Marching‑Cubes JS实现（无WASM，无外部依赖）
         const MarchingCubesJS = (()=>{
-            // 简化版MC，适合小体积测试
             function compute(voxels, width, height, depth, iso){
                 const vertices = [];
                 const indices = [];
-                const step = 2; // 降采样加速，数值越大模型越粗糙
+                const step = 2;
                 for(let z=0; z<depth-step; z+=step){
                     for(let y=0; y<height-step; y+=step){
                         for(let x=0; x<width-step; x+=step){
@@ -168,7 +169,6 @@
         const clock = new THREE.Clock();
         let currentModel = null;
 
-        // DICOM volume缓存
         let volumeData = null;
         let volumeDims = null;
         let volumeSpacing = null;
@@ -293,7 +293,6 @@
             fileInput.click();
         };
 
-        // DICOM解析，读取多切片，组装volume
         async function readDicomFiles(fileList){
             const slices = [];
             for(const f of fileList){
@@ -312,7 +311,6 @@
                 const pixelBuffer = new Uint16Array(byteData.buffer, pixelDataElement.dataOffset, pixelDataElement.length/2);
                 const slope = ds.float('x00281053') || 1.0;
                 const intercept = ds.float('x00281052') || 0.0;
-                //转为HU
                 const huArr = new Int16Array(pixelBuffer.length);
                 for(let i=0;i<pixelBuffer.length;i++){
                     huArr[i] = pixelBuffer[i]*slope + intercept;

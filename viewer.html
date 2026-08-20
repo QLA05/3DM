@@ -2,15 +2,13 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>骨骼3D预览</title>
-    <!-- 新增登录权限拦截脚本，最先执行 -->
+    <title>骨骼3D预览(DICOM重建)</title>
     <script>
         if (sessionStorage.getItem('isLogin') !== 'true') {
             alert("请先登录系统");
             window.location.href = "./index.html";
         }
     </script>
-
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -22,6 +20,7 @@
             z-index: 10;
             display: flex;
             gap: 8px;
+            flex-wrap: wrap;
         }
         #partBar{
             position: fixed;
@@ -37,6 +36,15 @@
             max-height:150px;
             overflow-y:auto;
         }
+        #thresholdPanel{
+            position:fixed;
+            top:80px;
+            left:12px;
+            z-index:10;
+            background:#ffffffdd;
+            padding:10px;
+            border-radius:6px;
+        }
         button {
             padding: 8px 14px;
             border: none;
@@ -50,14 +58,12 @@
         button:nth-child(4){ background:#6c757d; }
         button:nth-child(5){ background:#9933cc; }
         button:nth-child(6){ background:#ff6600; }
-        button:nth-child(7){ background:#c82333; }
         .partBtn{
             background:#666;
             font-size:12px;
             padding:5px 8px;
         }
         #fileInput { display: none; }
-        /* 二维码弹窗 */
         #qrModal{
             display:none;
             position:fixed;
@@ -81,14 +87,21 @@
 </head>
 <body>
     <div id="toolbar">
-        <button id="uploadBtn">上传本地GLB/GLTF模型</button>
+        <button id="uploadBtn">上传DICOM(.dcm)序列</button>
         <button id="resetView">复位视角</button>
         <button id="toggleAllBtn">隐藏</button>
         <button id="rotateBtn">旋转</button>
         <button id="qrBtn">生成访问二维码</button>
         <button id="playAnimBtn">播放动画</button>
     </div>
-    <!-- 二维码弹窗 -->
+
+    <div id="thresholdPanel">
+        <div>等值面HU阈值:<span id="threshVal">250</span></div>
+        <input type="range" id="isoThresholdSlider" min="-500" max="1500" value="250" step="10">
+        <button id="rebuildIsoBtn">重新重建</button>
+        <div id="statusText" style="margin-top:6px;color:#444"></div>
+    </div>
+
     <div id="qrModal">
         <div id="qrBox">
             <canvas id="qrCanvas"></canvas>
@@ -97,88 +110,114 @@
         </div>
     </div>
     <div id="partBar"></div>
-    <input type="file" id="fileInput" accept=".glb,.gltf">
+    <input type="file" id="fileInput" multiple accept=".dcm">
 
     <script type="importmap">
     {
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/",
+            "dicom-parser":"https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicom-parser.esm.js"
         }
     }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import dicomParser from 'dicom-parser';
+
+        // 简易Marching‑Cubes JS实现（无WASM，无外部依赖）
+        const MarchingCubesJS = (()=>{
+            // 简化版MC，适合小体积测试
+            function compute(voxels, width, height, depth, iso){
+                const vertices = [];
+                const indices = [];
+                const step = 2; // 降采样加速，数值越大模型越粗糙
+                for(let z=0; z<depth-step; z+=step){
+                    for(let y=0; y<height-step; y+=step){
+                        for(let x=0; x<width-step; x+=step){
+                            const idx = (z*height + y)*width + x;
+                            const v = voxels[idx];
+                            if(v>iso){
+                                vertices.push({x:x,y:y,z:z});
+                                vertices.push({x:x+step,y:y,z:z});
+                                vertices.push({x:x,y:y+step,z:z});
+                                vertices.push({x:x+step,y:y+step,z:z});
+                                const base = vertices.length-4;
+                                indices.push(base,base+1,base+2, base+1,base+3,base+2);
+                            }
+                        }
+                    }
+                }
+                return {vertices,indices};
+            }
+            return {compute};
+        })();
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0xf5f5f5); // 画布底色调亮一点
+        scene.background = new THREE.Color(0xf5f5f5);
         const partBar = document.getElementById('partBar');
+        const statusText = document.getElementById('statusText');
         let partBtnMap = new Map();
         let rotatePlaying = false;
         const rotateSpeed = 0.3;
         let allVisible = true;
-
-        // 动画相关全局变量
         let mixer = null;
         let animationClips = [];
         let isAnimPlaying = false;
         const clock = new THREE.Clock();
-        let currentAction = null;
+        let currentModel = null;
+
+        // DICOM volume缓存
+        let volumeData = null;
+        let volumeDims = null;
+        let volumeSpacing = null;
+
+        let isoThreshold = 250;
+        const threshValDom = document.getElementById('threshVal');
+        const isoThresholdSlider = document.getElementById('isoThresholdSlider');
+        const rebuildIsoBtn = document.getElementById('rebuildIsoBtn');
+        isoThresholdSlider.addEventListener('input',()=>{
+            isoThreshold = Number(isoThresholdSlider.value);
+            threshValDom.innerText = isoThreshold;
+        })
 
         const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 10000);
         camera.position.set(8, 8, 8);
-
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(innerWidth, innerHeight);
         renderer.setPixelRatio(devicePixelRatio);
         renderer.shadowMap.enabled = true;
-        renderer.outputColorSpace = THREE.SRGBColorSpace; // 色彩标准提亮
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.5; // 全局曝光提亮，解决整体发暗
+        renderer.toneMappingExposure = 1.5;
         document.body.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
 
-        // ========== 全新增强打光部分（重点提亮） ==========
-        // 1. 高强度环境光，消除模型死角黑面
         const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
         scene.add(ambientLight);
-
-        // 2. 主定向强光（正面主光源）
         const mainDirLight = new THREE.DirectionalLight(0xffffff, 1.2);
         mainDirLight.position.set(12, 24, 16);
         mainDirLight.castShadow = true;
         scene.add(mainDirLight);
-
-        // 3. 辅光1：左侧补光，消除左侧阴影
         const fillLightLeft = new THREE.DirectionalLight(0xe8f4ff, 0.6);
         fillLightLeft.position.set(-10, 12, 8);
         scene.add(fillLightLeft);
-
-        // 4. 辅光2：右侧底部补光，底部暗面提亮
         const fillLightBottom = new THREE.DirectionalLight(0xfff8e8, 0.5);
         fillLightBottom.position.set(6, -6, 12);
         scene.add(fillLightBottom);
-
-        // 5. 顶部柔光，提升整体通透感
         const topLight = new THREE.DirectionalLight(0xffffff, 0.4);
         topLight.position.set(0, 30, 0);
         scene.add(topLight);
-        // =================================================
-
-        const loader = new GLTFLoader();
-        let currentModel = null;
 
         function fitCameraToObject(obj) {
             const box = new THREE.Box3().setFromObject(obj);
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
             const maxSide = Math.max(size.x, size.y, size.z);
-
             const camOffset = maxSide * 1.8;
             camera.position.copy(center).add(new THREE.Vector3(camOffset, camOffset, camOffset));
             camera.lookAt(center);
@@ -204,7 +243,6 @@
             })
         }
 
-        // 全局显示/隐藏切换
         const toggleAllBtn = document.getElementById('toggleAllBtn');
         toggleAllBtn.onclick = () => {
             if (!currentModel) return;
@@ -220,38 +258,21 @@
             }
         }
 
-        // 旋转按钮
         const rotateBtn = document.getElementById('rotateBtn');
         rotateBtn.onclick = ()=>{
             if(!currentModel){
-                alert('请先上传模型');
+                alert('请先上传DICOM序列完成重建');
                 return;
             }
             rotatePlaying = !rotatePlaying;
             rotateBtn.textContent = rotatePlaying ? '暂停' : '旋转';
         }
 
-        // 动画播放按钮逻辑
         const playAnimBtn = document.getElementById('playAnimBtn');
         playAnimBtn.addEventListener('click', function () {
-            if (!mixer || animationClips.length === 0) {
-                alert('当前GLB模型不含内置动画');
-                return;
-            }
-            if (!isAnimPlaying) {
-                currentAction = mixer.clipAction(animationClips[0]);
-                currentAction.setLoop(THREE.LoopRepeat);
-                currentAction.play();
-                isAnimPlaying = true;
-                this.innerText = '暂停动画';
-            } else {
-                currentAction.pause();
-                isAnimPlaying = false;
-                this.innerText = '播放动画';
-            }
+            alert("DICOM重建模式暂不支持动画");
         })
 
-        // 二维码弹窗逻辑
         const qrBtn = document.getElementById('qrBtn');
         const qrModal = document.getElementById('qrModal');
         const qrCanvas = document.getElementById('qrCanvas');
@@ -265,45 +286,116 @@
         }
         closeQr.onclick = ()=> qrModal.style.display = 'none';
 
-        // 上传模型
         const uploadBtn = document.getElementById('uploadBtn');
         const fileInput = document.getElementById('fileInput');
-        uploadBtn.onclick = () => fileInput.click();
-        fileInput.onchange = e => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const url = URL.createObjectURL(file);
+        uploadBtn.onclick = () => {
+            console.log("上传按钮被点击");
+            fileInput.click();
+        };
+
+        // DICOM解析，读取多切片，组装volume
+        async function readDicomFiles(fileList){
+            const slices = [];
+            for(const f of fileList){
+                const buf = await f.arrayBuffer();
+                const byteData = new Uint8Array(buf);
+                const ds = dicomParser.parseDicom(byteData);
+                const seriesUid = ds.string('x0020000e');
+                if(!seriesUid) continue;
+                const rows = ds.uint16('x00280010');
+                const cols = ds.uint16('x00280011');
+                const pixelSpacing = ds.float('x00280030');
+                const sliceThickness = ds.float('x00180050');
+                const zPos = ds.float('x00200032',2);
+                const pixelDataElement = ds.elements.x7fe00010;
+                if(!pixelDataElement) continue;
+                const pixelBuffer = new Uint16Array(byteData.buffer, pixelDataElement.dataOffset, pixelDataElement.length/2);
+                const slope = ds.float('x00281053') || 1.0;
+                const intercept = ds.float('x00281052') || 0.0;
+                //转为HU
+                const huArr = new Int16Array(pixelBuffer.length);
+                for(let i=0;i<pixelBuffer.length;i++){
+                    huArr[i] = pixelBuffer[i]*slope + intercept;
+                }
+                slices.push({rows,cols,zPos,pixelSpacing,sliceThickness,huArr});
+            }
+            slices.sort((a,b)=>b.zPos - a.zPos);
+            const w = slices[0].cols;
+            const h = slices[0].rows;
+            const d = slices.length;
+            const voxels = new Int16Array(w*h*d);
+            for(let z=0;z<d;z++){
+                const slice = slices[z];
+                for(let y=0;y<h;y++){
+                    for(let x=0;x<w;x++){
+                        const srcIdx = y*w + x;
+                        const dstIdx = (z*h + y)*w + x;
+                        voxels[dstIdx] = slice.huArr[srcIdx];
+                    }
+                }
+            }
+            const spX = slices[0].pixelSpacing[0];
+            const spY = slices[0].pixelSpacing[1];
+            const spZ = slices[0].sliceThickness;
+            return {voxels, dims:[w,h,d], spacing:[spX,spY,spZ]};
+        }
+
+        rebuildIsoBtn.onclick = async ()=>{
+            if(!volumeData){
+                alert("请先上传DICOM序列");
+                return;
+            }
+            if(currentModel) scene.remove(currentModel);
+            statusText.innerText="正在执行Marching‑Cubes";
+            const {voxels,dims,spacing} = {voxels:volumeData, dims:volumeDims, spacing:volumeSpacing};
+            const {vertices,indices} = MarchingCubesJS.compute(voxels, dims[0], dims[1], dims[2], isoThreshold);
+            if(!vertices || vertices.length===0){
+                statusText.innerText="无面片，请调阈值";
+                return;
+            }
+            const posArr = new Float32Array(vertices.length*3);
+            for(let i=0;i<vertices.length;i++){
+                const v = vertices[i];
+                posArr[i*3+0] = v.x * spacing[0];
+                posArr[i*3+1] = v.y * spacing[1];
+                posArr[i*3+2] = v.z * spacing[2];
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(posArr,3));
+            geo.setIndex(indices);
+            geo.computeVertexNormals();
+            const mat = new THREE.MeshStandardMaterial({color:0xf0efe8,metalness:0.1,roughness:0.6});
+            const mesh = new THREE.Mesh(geo,mat);
+            const group = new THREE.Group();
+            group.name="DICOM_Volume";
+            group.add(mesh);
+            currentModel = group;
+            scene.add(currentModel);
+            fitCameraToObject(currentModel);
+            buildPartButtons(currentModel);
+            statusText.innerText="重建完成";
+        }
+
+        fileInput.onchange = async (e) => {
+            const files = Array.from(e.target.files);
+            if(!files.length) return;
+            if(currentModel) scene.remove(currentModel);
             rotatePlaying = false;
             rotateBtn.textContent = '旋转';
             allVisible = true;
             toggleAllBtn.textContent = '隐藏';
-            // 重置旧动画状态
-            mixer = null;
-            animationClips = [];
-            isAnimPlaying = false;
-            currentAction = null;
-            playAnimBtn.innerText = '播放动画';
-  
-            if (currentModel) scene.remove(currentModel);
-
-            loader.load(url, gltf => {
-                currentModel = gltf.scene;
-                currentModel.traverse(child => child.visible = true);
-                // 读取模型动画
-                animationClips = gltf.animations;
-                if(animationClips.length > 0){
-                    mixer = new THREE.AnimationMixer(currentModel);
-                }
-                scene.add(currentModel);
-                fitCameraToObject(currentModel);
-                buildPartButtons(currentModel);
-                URL.revokeObjectURL(url);
-                console.log('模型加载完成');
-            },
-            (progress)=>{
-                console.log('加载进度', progress.loaded/progress.total);
-            },
-            err => console.error('加载失败', err));
+            volumeData = null; volumeDims=null; volumeSpacing=null;
+            statusText.innerText="解析DICOM...";
+            try{
+                const vol = await readDicomFiles(files);
+                volumeData = vol.voxels;
+                volumeDims = vol.dims;
+                volumeSpacing = vol.spacing;
+                statusText.innerText=`加载完成，维度 ${vol.dims[0]}×${vol.dims[1]}×${vol.dims[2]}，点击重新重建`;
+            }catch(err){
+                console.error(err);
+                statusText.innerText="解析失败:"+err.message;
+            }
         };
 
         document.getElementById('resetView').onclick = () => {
@@ -316,7 +408,6 @@
             if(rotatePlaying && currentModel){
                 currentModel.rotation.y += rotateSpeed * 0.016;
             }
-            // 更新动画
             if(mixer && isAnimPlaying){
                 mixer.update(delta);
             }

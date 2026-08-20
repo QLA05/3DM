@@ -295,7 +295,6 @@
             const h = slices[0].rows;
             const d = slices.length;
             const voxels = new Int16Array(w*h*d);
-            // 去掉嵌套三重循环，单层循环拷贝，防止栈溢出
             for(let z=0; z<d; z++){
                 const slice = slices[z];
                 const offset = z * w * h;
@@ -365,8 +364,7 @@
                 volumeDims = vol.dims;
                 volumeSpacing = vol.spacing;
                 statusText.innerText=`加载完成，维度 ${vol.dims[0]}×${vol.dims[1]}×${vol.dims[2]}，点击重新重建`;
-                console.log("体素最大值",Math.max(...volumeData));
-                console.log("体素最小值",Math.min(...volumeData));
+                // 删掉 Math.max(...volumeData) 这两行，防止栈溢出
             }catch(err){
                 console.error(err);
                 statusText.innerText="解析失败:"+err.message;

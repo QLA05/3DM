@@ -11,8 +11,8 @@
     </script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-    <!-- UMD脚本，挂载到window.MarchingCubes -->
-    <script src="https://cdn.jsdelivr.net/npm/marching-cubes@0.3.0/dist/marching-cubes.umd.js"></script>
+    <!-- isosurface 经典marching‑cubes实现，umd全局导出window.isosurface -->
+    <script src="https://cdn.jsdelivr.net/npm/isosurface@1.0.0/dist/isosurface.umd.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { overflow: hidden; }
@@ -126,8 +126,7 @@
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        // 从全局window取，不再import
-        const MarchingCubes = window.MarchingCubes;
+        const isosurface = window.isosurface;
         const dicomParser = window.dicomParser;
 
         const scene = new THREE.Scene();
@@ -317,26 +316,29 @@
             statusText.innerText="正在执行Marching‑Cubes";
             const {voxels,dims,spacing} = {voxels:volumeData, dims:volumeDims, spacing:volumeSpacing};
             const [w,h,d] = dims;
-            const mc = new MarchingCubes(w, h, d);
-            mc.setData(voxels);
-            const mesh = mc.generate(isoThreshold);
-
-            console.log("顶点数量",mesh.vertices.length,"索引数量",mesh.indices.length);
-            if(!mesh || mesh.vertices.length === 0){
+            // isosurface库marching‑cubes接口
+            const mesh = isosurface.marchingCubes({
+                data: voxels,
+                dims: [w, h, d],
+                threshold: isoThreshold
+            });
+            console.log("顶点数量",mesh.positions.length,"索引数量",mesh.cells.length);
+            if(!mesh || mesh.positions.length === 0){
                 statusText.innerText="无面片，请调阈值";
                 return;
             }
 
-            const posArr = new Float32Array(mesh.vertices.length*3);
-            for(let i=0;i<mesh.vertices.length;i++){
-                const v = mesh.vertices[i];
-                posArr[i*3+0] = v.x * spacing[0];
-                posArr[i*3+1] = v.y * spacing[1];
-                posArr[i*3+2] = v.z * spacing[2];
+            const posArr = new Float32Array(mesh.positions.length*3);
+            for(let i=0;i<mesh.positions.length;i++){
+                const v = mesh.positions[i];
+                posArr[i*3+0] = v[0] * spacing[0];
+                posArr[i*3+1] = v[1] * spacing[1];
+                posArr[i*3+2] = v[2] * spacing[2];
             }
+            const indexArr = new Uint32Array(mesh.cells.flat());
             const geo = new THREE.BufferGeometry();
             geo.setAttribute('position', new THREE.BufferAttribute(posArr,3));
-            geo.setIndex(mesh.indices);
+            geo.setIndex(new THREE.BufferAttribute(indexArr,1));
             geo.computeVertexNormals();
             const mat = new THREE.MeshStandardMaterial({color:0xf0efe8,metalness:0.1,roughness:0.6});
             const meshObj = new THREE.Mesh(geo,mat);

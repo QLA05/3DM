@@ -11,6 +11,8 @@
     </script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+    <!-- UMD脚本，挂载到window.MarchingCubes -->
+    <script src="https://cdn.jsdelivr.net/npm/marching-cubes@0.3.0/dist/marching-cubes.umd.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { overflow: hidden; }
@@ -117,16 +119,15 @@
     {
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/",
-            "marching-cubes": "https://cdn.jsdelivr.net/npm/marching-cubes@0.3.0/+esm"
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
         }
     }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        // ⚠️这里是default导出，不要花括号！！
-        import MarchingCubes from 'marching-cubes';
+        // 从全局window取，不再import
+        const MarchingCubes = window.MarchingCubes;
         const dicomParser = window.dicomParser;
 
         const scene = new THREE.Scene();

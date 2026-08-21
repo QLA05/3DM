@@ -11,7 +11,6 @@
     </script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marching-cubes@0.3.0/dist/marching-cubes.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { overflow: hidden; }
@@ -118,15 +117,17 @@
     {
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/",
+            "marching-cubes": "https://cdn.jsdelivr.net/npm/marching-cubes@0.3.0/+esm"
         }
     }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // ⚠️这里是default导出，不要花括号！！
+        import MarchingCubes from 'marching-cubes';
         const dicomParser = window.dicomParser;
-        const MarchingCubes = window.MarchingCubes;
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf5f5f5);
@@ -364,7 +365,6 @@
                 volumeDims = vol.dims;
                 volumeSpacing = vol.spacing;
                 statusText.innerText=`加载完成，维度 ${vol.dims[0]}×${vol.dims[1]}×${vol.dims[2]}，点击重新重建`;
-                // 删掉 Math.max(...volumeData) 这两行，防止栈溢出
             }catch(err){
                 console.error(err);
                 statusText.innerText="解析失败:"+err.message;

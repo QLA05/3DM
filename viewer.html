@@ -35,7 +35,7 @@
         <div>等值面HU阈值:<span id="hu-val">250</span></div>
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
-        <div id="status-text">程序启动中...</div>
+        <div id="status-text">等待上传DICOM</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
     </div>
 </div>
@@ -102,7 +102,6 @@ const huValSpan = document.getElementById('hu-val');
 const fileInput = document.getElementById('file-input');
 const btnUpload = document.getElementById('btn-upload');
 
-// 直接绑定全部UI事件，不再等待外部script加载
 btnUpload.onclick = ()=> fileInput.click();
 huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
 
@@ -139,22 +138,27 @@ fileInput.onchange = async (e)=>{
     for(const f of files){
         try{
             const arrayBuf = await f.arrayBuffer();
+            // dcmjs读取文件
             const dataset = dcmjs.data.DicomMessage.readFile(arrayBuf);
             const ds = dataset.dict;
             const rows = ds.Rows;
             const cols = ds.Columns;
-            if(!rows || !cols || !ds.PixelData){
+
+            // 重点修复：像素数据在dataset.pixelData，不在dict！
+            const pixelData = dataset.pixelData;
+
+            if(!rows || !cols || !pixelData){
                 logText.innerText += `跳过:${f.name} 无像素\n`;
                 continue;
             }
             dimX = cols;
             dimY = rows;
-            const pixelArr = ds.PixelData;
+
             const slope = ds.RescaleSlope ?? 1.0;
             const intercept = ds.RescaleIntercept ?? 0.0;
-            const huArr = new Float32Array(pixelArr.length);
-            for(let i=0;i<pixelArr.length;i++){
-                huArr[i] = pixelArr[i] * slope + intercept;
+            const huArr = new Float32Array(pixelData.length);
+            for(let i=0;i<pixelData.length;i++){
+                huArr[i] = pixelData[i] * slope + intercept;
             }
             const ipp = ds.ImagePositionPatient;
             sliceList.push({
@@ -217,9 +221,7 @@ function initThree(){
     animate();
 }
 
-// 启动
 initThree();
-statusText.innerText = "等待上传DICOM";
 console.log("✅ dcmjs模块加载成功",dcmjs);
 </script>
 </body>

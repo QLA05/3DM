@@ -41,7 +41,6 @@
 </div>
 <div id="viewer-container"></div>
 
-<!-- UMD全局引入 dicom‑parser -->
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
 
 <script type="importmap">
@@ -96,6 +95,10 @@ let scene, camera, renderer, controls;
 let dicomVolume = null;
 let volumeMesh = null;
 let rotateAnim = false;
+// 保存像素间距
+let pixelSpacing = [1.0,1.0];
+let sliceThickness = 1.0;
+
 const statusText = document.getElementById('status-text');
 const logText = document.getElementById('log-text');
 const huSlider = document.getElementById('hu-slider');
@@ -114,15 +117,41 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     const geo = MarchingCubesHelper.createIsoSurface(dicomVolume.data,dicomVolume.width,dicomVolume.height,dicomVolume.depth,isoThresh);
     const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
     volumeMesh = new THREE.Mesh(geo, mat);
+
+    // 缩放：使用dicom真实像素间距
+    volumeMesh.scale.set(pixelSpacing[0], pixelSpacing[1], sliceThickness);
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+
+    // 模型居中
+    const box = geo.boundingBox;
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    volumeMesh.position.copy(center).multiplyScalar(-1);
+
     scene.add(volumeMesh);
     const vertCount = geo.attributes.position?.count ?? 0;
     statusText.innerText = `重建完成，顶点:${vertCount}`;
     console.log("顶点数量:",vertCount);
+
+    // 相机自动看向模型
+    const sphere = geo.boundingSphere;
+    const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
+    camera.position.set(radius*1.5, radius*1.5, radius*1.5);
+    controls.target.set(0,0,0);
+    controls.update();
 };
 
 document.getElementById('btn-reset').onclick = ()=>{
-    camera.position.set(120,120,180);
-    controls.reset();
+    if(volumeMesh){
+        const sphere = volumeMesh.geometry.boundingSphere;
+        const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
+        camera.position.set(radius*1.5, radius*1.5, radius*1.5);
+        controls.target.set(0,0,0);
+    }else{
+        camera.position.set(300,300,400);
+    }
+    controls.update();
 };
 document.getElementById('btn-hide').onclick = ()=>{
     if(volumeMesh) volumeMesh.visible = !volumeMesh.visible;
@@ -140,7 +169,6 @@ fileInput.onchange = async (e)=>{
         try{
             const arrayBuf = await f.arrayBuffer();
             const byteArray = new Uint8Array(arrayBuf);
-            // 全局变量dicomParser
             const dataSet = dicomParser.parseDicom(byteArray);
 
             const rows = dataSet.uint16('x00280010');
@@ -153,6 +181,15 @@ fileInput.onchange = async (e)=>{
             }
             dimX = cols;
             dimY = rows;
+
+            //读取像素间距
+            const spacingStr = dataSet.string('x00280030');
+            if(spacingStr){
+                const sp = spacingStr.split('\\').map(Number);
+                pixelSpacing[0]=sp[0];pixelSpacing[1]=sp[1];
+            }
+            const thick = dataSet.floatString('x00180050');
+            if(thick) sliceThickness=thick;
 
             const pixelBuffer = new Uint16Array(
                 byteArray.buffer,
@@ -203,17 +240,17 @@ function initThree(){
     const container = document.getElementById('viewer-container');
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xeeeeee);
-    camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1,5000);
-    camera.position.set(120,120,180);
+    camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1,20000);
+    camera.position.set(300,300,400);
     renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     const light1 = new THREE.DirectionalLight(0xffffff, 1);
-    light1.position.set(100,100,100);
+    light1.position.set(200,200,200);
     scene.add(light1);
-    scene.add(new THREE.AmbientLight(0xffffff,0.4));
+    scene.add(new THREE.AmbientLight(0xffffff,0.5));
     window.addEventListener('resize',()=>{
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();

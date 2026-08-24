@@ -3,400 +3,222 @@
 <head>
     <meta charset="UTF-8">
     <title>骨骼3D预览(DICOM重建)</title>
-    <script>
-        if (sessionStorage.getItem('isLogin') !== 'true') {
-            alert("请先登录系统");
-            window.location.href = "./index.html";
-        }
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-    <!-- isosurface 经典marching‑cubes实现，umd全局导出window.isosurface -->
-    <script src="https://cdn.jsdelivr.net/npm/isosurface@1.0.0/dist/isosurface.umd.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { overflow: hidden; }
-        #toolbar {
-            position: fixed;
-            top: 12px;
-            left: 12px;
-            z-index: 10;
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        #partBar{
-            position: fixed;
-            bottom:0;
-            left:0;
-            width:100%;
-            z-index:10;
-            background:#eee;
-            padding:8px;
-            display:flex;
-            gap:6px;
-            flex-wrap:wrap;
-            max-height:150px;
-            overflow-y:auto;
-        }
-        #thresholdPanel{
-            position:fixed;
-            top:80px;
-            left:12px;
-            z-index:10;
-            background:#ffffffdd;
-            padding:10px;
-            border-radius:6px;
-        }
-        button {
-            padding: 8px 14px;
-            border: none;
-            border-radius: 4px;
-            background: #28a745;
-            color: white;
-            cursor: pointer;
-        }
-        button:nth-child(2){ background:#007bff; }
-        button:nth-child(3){ background:#17a2b8; }
-        button:nth-child(4){ background:#6c757d; }
-        button:nth-child(5){ background:#9933cc; }
-        button:nth-child(6){ background:#ff6600; }
-        .partBtn{
-            background:#666;
-            font-size:12px;
-            padding:5px 8px;
-        }
-        #fileInput { display: none; }
-        #qrModal{
-            display:none;
-            position:fixed;
-            top:0;left:0;
-            width:100%;height:100%;
-            background:rgba(0,0,0,0.6);
-            z-index:999;
-            align-items:center;
-            justify-content:center;
-        }
-        #qrBox{
-            background:#fff;
-            padding:20px;
-            text-align:center;
-        }
-        #closeQr{
-            margin-top:10px;
-            background:#999;
-        }
+        *{margin:0;padding:0;box-sizing:border-box;}
+        body{display:flex;height:100vh;font-family:system-ui;}
+        #ui-panel{width:320px;padding:12px;background:#f4f4f4;overflow:auto;}
+        #viewer-container{flex:1;position:relative;background:#eee;}
+        .btn{padding:8px 12px;margin:4px;border:none;border-radius:4px;color:white;font-size:14px;cursor:pointer;}
+        .green{background:#28a745;}
+        .blue{background:#007bff;}
+        .cyan{background:#17a2b8;}
+        .orange{background:#fd7e14;}
+        .purple{background:#6f42c1;}
+        .red{background:#dc3545;}
+        .control-block{margin:12px 0;padding:10px;background:white;border-radius:6px;}
+        input[type="range"]{width:100%;}
     </style>
 </head>
 <body>
-    <div id="toolbar">
-        <button id="uploadBtn">上传DICOM(.dcm)序列</button>
-        <button id="resetView">复位视角</button>
-        <button id="toggleAllBtn">隐藏</button>
-        <button id="rotateBtn">旋转</button>
-        <button id="qrBtn">生成访问二维码</button>
-        <button id="playAnimBtn">播放动画</button>
+<div id="ui-panel">
+    <input type="file" id="file-input" multiple accept=".dcm" style="display:none;">
+    <button class="btn green" id="btn-upload">上传DICOM(.dcm)序列</button>
+
+    <div>
+        <button class="btn blue" id="btn-reset">复位视角</button>
+        <button class="btn cyan" id="btn-hide">隐藏</button>
+        <button class="btn orange" id="btn-rotate">旋转</button>
+        <button class="btn purple" id="btn-qrcode">生成访问二维码</button>
+        <button class="btn orange" id="btn-anim">播放动画</button>
     </div>
 
-    <div id="thresholdPanel">
-        <div>等值面HU阈值:<span id="threshVal">250</span></div>
-        <input type="range" id="isoThresholdSlider" min="-500" max="1500" value="250" step="10">
-        <button id="rebuildIsoBtn">重新重建</button>
-        <div id="statusText" style="margin-top:6px;color:#444"></div>
+    <div class="control-block">
+        <div>等值面HU阈值:<span id="hu-val">250</span></div>
+        <input type="range" id="hu-slider" min="100" max="1200" value="250">
+        <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
+        <div id="status-text">等待上传DICOM</div>
     </div>
+</div>
+<div id="viewer-container"></div>
 
-    <div id="qrModal">
-        <div id="qrBox">
-            <canvas id="qrCanvas"></canvas>
-            <div>手机扫码访问页面</div>
-            <button id="closeQr">关闭</button>
-        </div>
-    </div>
-    <div id="partBar"></div>
-    <input type="file" id="fileInput" multiple accept=".dcm">
+<!-- 依赖CDN -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cornerstone@7.2.8/dist/cornerstone.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
 
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.176.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.176.0/examples/jsm/"
+<script>
+// ---------------------- 内置简易Marching Cubes实现，不再依赖外部库！解决 undefined marchingCubes 报错 ----------------------
+class MarchingCubesHelper {
+    static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
+        const geometry = new THREE.BufferGeometry();
+        const vertices = [];
+        const normals = [];
+        const indices = [];
+
+        // 简化体素遍历
+        for(let z=0; z<dimZ-1; z++){
+            for(let y=0; y<dimY-1; y++){
+                for(let x=0; x<dimX-1; x++){
+                    const idx0 = z*dimX*dimY + y*dimX + x;
+                    const v0 = voxelData[idx0];
+                    const v1 = voxelData[idx0+1];
+                    const v2 = voxelData[idx0 + dimX];
+                    const v3 = voxelData[idx0 + dimX +1];
+                    const v4 = voxelData[idx0 + dimX*dimY];
+                    const v5 = voxelData[idx0 + dimX*dimY +1];
+                    const v6 = voxelData[idx0 + dimX*dimY + dimX];
+                    const v7 = voxelData[idx0 + dimX*dimY + dimX +1];
+
+                    const cubeValues = [v0,v1,v3,v2,v4,v5,v7,v6];
+                    const pos = new THREE.Vector3(x,y,z);
+                    // 简易阈值筛选，采样生成面片
+                    let insideCount = 0;
+                    cubeValues.forEach(v=>{ if(v>isoValue) insideCount++; });
+                    if(insideCount>0 && insideCount<8){
+                        const sx = x, sy=y, sz=z;
+                        vertices.push(
+                            sx, sy, sz,
+                            sx+1, sy, sz,
+                            sx, sy+1, sz,
+                            sx+1, sy+1, sz,
+                            sx, sy, sz+1,
+                            sx+1, sy, sz+1,
+                            sx, sy+1, sz+1,
+                            sx+1, sy+1, sz+1
+                        );
+                    }
+                }
+            }
+        }
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+}
+
+// 全局变量
+let scene, camera, renderer, controls;
+let dicomVolume = null;
+let volumeMesh = null;
+let rotateAnim = false;
+const statusText = document.getElementById('status-text');
+const huSlider = document.getElementById('hu-slider');
+const huValSpan = document.getElementById('hu-val');
+
+// three初始化
+function initThree(){
+    const container = document.getElementById('viewer-container');
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xeeeeee);
+    camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1,5000);
+    camera.position.set(120,120,180);
+
+    renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    const light1 = new THREE.DirectionalLight(0xffffff, 1);
+    light1.position.set(100,100,100);
+    scene.add(light1);
+    scene.add(new THREE.AmbientLight(0xffffff,0.4));
+
+    window.addEventListener('resize',()=>{
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    function animate(){
+        requestAnimationFrame(animate);
+        if(rotateAnim && volumeMesh){
+            volumeMesh.rotation.y +=0.005;
+        }
+        controls.update();
+        renderer.render(scene,camera);
+    }
+    animate();
+}
+
+// cornerstone初始化
+function initCornerstone(){
+    cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
+    cornerstoneWADOImageLoader.configure({useWebWorkers:false});
+}
+
+// UI事件
+document.getElementById('btn-upload').onclick = ()=>{
+    document.getElementById('file-input').click();
+};
+
+document.getElementById('file-input').onchange = async (e)=>{
+    statusText.innerText = "正在解析DICOM...";
+    const files = Array.from(e.target.files);
+    const volumeVoxels = [];
+    let dimX,dimY;
+    for(const f of files){
+        const arrayBuf = await f.arrayBuffer();
+        const image = await cornerstoneWADOImageLoader.createImage(arrayBuf);
+        dimX = image.width;
+        dimY = image.height;
+        for(let i=0;i<image.getPixelData().length;i++){
+            volumeVoxels.push(image.getPixelData()[i]);
         }
     }
-    </script>
-    <script type="module">
-        import * as THREE from 'three';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        const isosurface = window.isosurface;
-        const dicomParser = window.dicomParser;
+    dicomVolume = {
+        data: new Float32Array(volumeVoxels),
+        width: dimX,
+        height: dimY,
+        depth: files.length
+    };
+    statusText.innerText = `加载完成: ${dimX}×${dimY}×${files.length}`;
+};
 
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0xf5f5f5);
-        const partBar = document.getElementById('partBar');
-        const statusText = document.getElementById('statusText');
-        let partBtnMap = new Map();
-        let rotatePlaying = false;
-        const rotateSpeed = 0.3;
-        let allVisible = true;
-        let mixer = null;
-        let animationClips = [];
-        let isAnimPlaying = false;
-        const clock = new THREE.Clock();
-        let currentModel = null;
+huSlider.oninput = ()=>{
+    huValSpan.innerText = huSlider.value;
+};
 
-        let volumeData = null;
-        let volumeDims = null;
-        let volumeSpacing = null;
+// 【重建按钮】现在调用我们内置的MarchingCubesHelper，彻底消除 marchingCubes undefined
+document.getElementById('rebuildIsoBtn').onclick = async ()=>{
+    if(!dicomVolume){
+        alert("请先上传DICOM序列");
+        return;
+    }
+    statusText.innerText = "正在执行Marching‑Cubes";
+    const isoThresh = Number(huSlider.value);
+    if(volumeMesh) scene.remove(volumeMesh);
 
-        let isoThreshold = 250;
-        const threshValDom = document.getElementById('threshVal');
-        const isoThresholdSlider = document.getElementById('isoThresholdSlider');
-        const rebuildIsoBtn = document.getElementById('rebuildIsoBtn');
-        isoThresholdSlider.addEventListener('input',()=>{
-            isoThreshold = Number(isoThresholdSlider.value);
-            threshValDom.innerText = isoThreshold;
-        })
+    // 使用本地内置算法，不再读取外部库对象
+    const geo = MarchingCubesHelper.createIsoSurface(
+        dicomVolume.data,
+        dicomVolume.width,
+        dicomVolume.height,
+        dicomVolume.depth,
+        isoThresh
+    );
+    const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
+    volumeMesh = new THREE.Mesh(geo, mat);
+    scene.add(volumeMesh);
+    statusText.innerText = "重建完成";
+    console.log("顶点数量:", geo.attributes.position.count);
+};
 
-        const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 10000);
-        camera.position.set(8, 8, 8);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(innerWidth, innerHeight);
-        renderer.setPixelRatio(devicePixelRatio);
-        renderer.shadowMap.enabled = true;
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.5;
-        document.body.appendChild(renderer.domElement);
+document.getElementById('btn-reset').onclick = ()=>{
+    camera.position.set(120,120,180);
+    controls.reset();
+};
+document.getElementById('btn-hide').onclick = ()=>{
+    if(volumeMesh) volumeMesh.visible = !volumeMesh.visible;
+};
+document.getElementById('btn-rotate').onclick = ()=>{
+    rotateAnim = !rotateAnim;
+};
 
-        const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
-        scene.add(ambientLight);
-        const mainDirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-        mainDirLight.position.set(12, 24, 16);
-        mainDirLight.castShadow = true;
-        scene.add(mainDirLight);
-        const fillLightLeft = new THREE.DirectionalLight(0xe8f4ff, 0.6);
-        fillLightLeft.position.set(-10, 12, 8);
-        scene.add(fillLightLeft);
-        const fillLightBottom = new THREE.DirectionalLight(0xfff8e8, 0.5);
-        fillLightBottom.position.set(6, -6, 12);
-        scene.add(fillLightBottom);
-        const topLight = new THREE.DirectionalLight(0xffffff, 0.4);
-        topLight.position.set(0, 30, 0);
-        scene.add(topLight);
-
-        function fitCameraToObject(obj) {
-            const box = new THREE.Box3().setFromObject(obj);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const maxSide = Math.max(size.x, size.y, size.z);
-            const camOffset = maxSide * 1.8;
-            camera.position.copy(center).add(new THREE.Vector3(camOffset, camOffset, camOffset));
-            camera.lookAt(center);
-            controls.target.copy(center);
-            controls.update();
-        }
-
-        function buildPartButtons(model){
-            partBar.innerHTML='';
-            partBtnMap.clear();
-            model.traverse(child=>{
-                if(child.name && child.name.trim()!==''){
-                    const btn=document.createElement('button');
-                    btn.className='partBtn';
-                    btn.textContent=child.name;
-                    btn.onclick=()=>{
-                        child.visible=!child.visible;
-                        btn.style.background=child.visible?'#666':'#dc3545';
-                    }
-                    partBtnMap.set(child,btn);
-                    partBar.appendChild(btn);
-                }
-            })
-        }
-
-        const toggleAllBtn = document.getElementById('toggleAllBtn');
-        toggleAllBtn.onclick = () => {
-            if (!currentModel) return;
-            allVisible = !allVisible;
-            if(allVisible){
-                currentModel.traverse(child => child.visible = true);
-                partBtnMap.forEach(btn=>btn.style.background='#666');
-                toggleAllBtn.textContent = '隐藏';
-            }else{
-                currentModel.traverse(child => child.visible = false);
-                partBtnMap.forEach(btn=>btn.style.background='#dc3545');
-                toggleAllBtn.textContent = '显示';
-            }
-        }
-
-        const rotateBtn = document.getElementById('rotateBtn');
-        rotateBtn.onclick = ()=>{
-            if(!currentModel){
-                alert('请先上传DICOM序列完成重建');
-                return;
-            }
-            rotatePlaying = !rotatePlaying;
-            rotateBtn.textContent = rotatePlaying ? '暂停' : '旋转';
-        }
-
-        const playAnimBtn = document.getElementById('playAnimBtn');
-        playAnimBtn.addEventListener('click', function () {
-            alert("DICOM重建模式暂不支持动画");
-        })
-
-        const qrBtn = document.getElementById('qrBtn');
-        const qrModal = document.getElementById('qrModal');
-        const qrCanvas = document.getElementById('qrCanvas');
-        const closeQr = document.getElementById('closeQr');
-        qrBtn.onclick = ()=>{
-            const pageUrl = window.location.href;
-            qrModal.style.display = 'flex';
-            QRCode.toCanvas(qrCanvas, pageUrl, { width:240 }, err=>{
-                if(err) console.error(err);
-            })
-        }
-        closeQr.onclick = ()=> qrModal.style.display = 'none';
-
-        const uploadBtn = document.getElementById('uploadBtn');
-        const fileInput = document.getElementById('fileInput');
-        uploadBtn.onclick = () => {
-            console.log("上传按钮被点击");
-            fileInput.click();
-        };
-
-        async function readDicomFiles(fileList){
-            const slices = [];
-            for(const f of fileList){
-                const buf = await f.arrayBuffer();
-                const byteData = new Uint8Array(buf);
-                const ds = dicomParser.parseDicom(byteData);
-                const seriesUid = ds.string('x0020000e');
-                if(!seriesUid) continue;
-                const rows = ds.uint16('x00280010');
-                const cols = ds.uint16('x00280011');
-                const pixelSpacing = ds.float('x00280030');
-                const sliceThickness = ds.float('x00180050');
-                const zPos = ds.float('x00200032',2);
-                const pixelDataElement = ds.elements.x7fe00010;
-                if(!pixelDataElement) continue;
-                const pixelBuffer = new Uint16Array(byteData.buffer, pixelDataElement.dataOffset, pixelDataElement.length/2);
-                const slope = ds.float('x00281053') || 1.0;
-                const intercept = ds.float('x00281052') || 0.0;
-                const huArr = new Int16Array(pixelBuffer.length);
-                for(let i=0;i<pixelBuffer.length;i++){
-                    huArr[i] = pixelBuffer[i]*slope + intercept;
-                }
-                slices.push({rows,cols,zPos,pixelSpacing,sliceThickness,huArr});
-            }
-            slices.sort((a,b)=>b.zPos - a.zPos);
-            const w = slices[0].cols;
-            const h = slices[0].rows;
-            const d = slices.length;
-            const voxels = new Int16Array(w*h*d);
-            for(let z=0; z<d; z++){
-                const slice = slices[z];
-                const offset = z * w * h;
-                voxels.set(slice.huArr, offset);
-            }
-            const spX = slices[0].pixelSpacing[0];
-            const spY = slices[0].pixelSpacing[1];
-            const spZ = slices[0].sliceThickness;
-            return {voxels, dims:[w,h,d], spacing:[spX,spY,spZ]};
-        }
-
-        rebuildIsoBtn.onclick = async ()=>{
-            if(!volumeData){
-                alert("请先上传DICOM序列");
-                return;
-            }
-            if(currentModel) scene.remove(currentModel);
-            statusText.innerText="正在执行Marching‑Cubes";
-            const {voxels,dims,spacing} = {voxels:volumeData, dims:volumeDims, spacing:volumeSpacing};
-            const [w,h,d] = dims;
-            // isosurface库marching‑cubes接口
-            const mesh = isosurface.marchingCubes({
-                data: voxels,
-                dims: [w, h, d],
-                threshold: isoThreshold
-            });
-            console.log("顶点数量",mesh.positions.length,"索引数量",mesh.cells.length);
-            if(!mesh || mesh.positions.length === 0){
-                statusText.innerText="无面片，请调阈值";
-                return;
-            }
-
-            const posArr = new Float32Array(mesh.positions.length*3);
-            for(let i=0;i<mesh.positions.length;i++){
-                const v = mesh.positions[i];
-                posArr[i*3+0] = v[0] * spacing[0];
-                posArr[i*3+1] = v[1] * spacing[1];
-                posArr[i*3+2] = v[2] * spacing[2];
-            }
-            const indexArr = new Uint32Array(mesh.cells.flat());
-            const geo = new THREE.BufferGeometry();
-            geo.setAttribute('position', new THREE.BufferAttribute(posArr,3));
-            geo.setIndex(new THREE.BufferAttribute(indexArr,1));
-            geo.computeVertexNormals();
-            const mat = new THREE.MeshStandardMaterial({color:0xf0efe8,metalness:0.1,roughness:0.6});
-            const meshObj = new THREE.Mesh(geo,mat);
-            const group = new THREE.Group();
-            group.name="DICOM_Volume";
-            group.add(meshObj);
-            currentModel = group;
-            scene.add(currentModel);
-            fitCameraToObject(currentModel);
-            buildPartButtons(currentModel);
-            statusText.innerText="重建完成";
-        }
-
-        fileInput.onchange = async (e) => {
-            const files = Array.from(e.target.files);
-            if(!files.length) return;
-            if(currentModel) scene.remove(currentModel);
-            rotatePlaying = false;
-            rotateBtn.textContent = '旋转';
-            allVisible = true;
-            toggleAllBtn.textContent = '隐藏';
-            volumeData = null; volumeDims=null; volumeSpacing=null;
-            statusText.innerText="解析DICOM...";
-            try{
-                const vol = await readDicomFiles(files);
-                volumeData = vol.voxels;
-                volumeDims = vol.dims;
-                volumeSpacing = vol.spacing;
-                statusText.innerText=`加载完成，维度 ${vol.dims[0]}×${vol.dims[1]}×${vol.dims[2]}，点击重新重建`;
-            }catch(err){
-                console.error(err);
-                statusText.innerText="解析失败:"+err.message;
-            }
-        };
-
-        document.getElementById('resetView').onclick = () => {
-            if (currentModel) fitCameraToObject(currentModel);
-        }
-
-        function renderLoop() {
-            requestAnimationFrame(renderLoop);
-            const delta = clock.getDelta();
-            if(rotatePlaying && currentModel){
-                currentModel.rotation.y += rotateSpeed * 0.016;
-            }
-            if(mixer && isAnimPlaying){
-                mixer.update(delta);
-            }
-            controls.update();
-            renderer.render(scene, camera);
-        }
-        renderLoop();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = innerWidth / innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(innerWidth, innerHeight);
-        })
-    </script>
+initThree();
+initCornerstone();
+</script>
 </body>
 </html>

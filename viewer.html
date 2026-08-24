@@ -35,14 +35,14 @@
         <div>等值面HU阈值:<span id="hu-val">250</span></div>
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
-        <div id="status-text">等待上传DICOM</div>
+        <div id="status-text">初始化中...</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
     </div>
 </div>
 <div id="viewer-container"></div>
 
-<!-- UMD库 普通script，全局对象 -->
-<script src="https://cdn.jsdelivr.net/npm/cornerstone@7.2.8/dist/cornerstone.min.js"></script>
+<!-- 修复：包名是 cornerstone-core，不是 cornerstone -->
+<script src="https://cdn.jsdelivr.net/npm/cornerstone-core@2.6.1/dist/cornerstone.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
 
 <script type="importmap">
@@ -133,7 +133,6 @@ function initThree(){
 }
 
 function initCornerstone(){
-    // 必须确认全局对象存在
     if(!window.cornerstone || !window.cornerstoneWADOImageLoader){
         statusText.innerText = "等待cornerstone库加载...";
         setTimeout(initCornerstone,200);
@@ -142,9 +141,9 @@ function initCornerstone(){
     cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
     cornerstoneWADOImageLoader.configure({useWebWorkers:false});
     statusText.innerText = "等待上传DICOM";
+    console.log("cornerstone初始化成功", typeof cornerstone, typeof cornerstoneWADOImageLoader);
 }
 
-// UI事件
 document.getElementById('btn-upload').onclick = ()=>document.getElementById('file-input').click();
 
 document.getElementById('file-input').onchange = async (e)=>{
@@ -171,7 +170,7 @@ document.getElementById('file-input').onchange = async (e)=>{
     }
     if(validFileCount===0){
         statusText.innerText = "没有读到有效DICOM图像！";
-        alert("选中的文件全部不含像素图像，请选择CT切片dcm，不要选报告/结构化dcm");
+        alert("选中的文件全部不含像素图像，请选择CT切片dcm");
         return;
     }
     dicomVolume = {
@@ -208,7 +207,6 @@ document.getElementById('btn-hide').onclick = ()=>{
 };
 document.getElementById('btn-rotate').onclick = ()=> rotateAnim = !rotateAnim;
 
-// 页面全部加载完成，再启动
 window.addEventListener('load',()=>{
     initThree();
     initCornerstone();

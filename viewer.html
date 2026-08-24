@@ -35,19 +35,18 @@
         <div>等值面HU阈值:<span id="hu-val">250</span></div>
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
-        <div id="status-text">等待dcmjs库加载...</div>
+        <div id="status-text">程序启动中...</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
     </div>
 </div>
 <div id="viewer-container"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/dcmjs@0.33.0/dist/dcmjs.min.js"></script>
-
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "dcmjs": "https://cdn.jsdelivr.net/npm/dcmjs@0.33.0/+esm"
   }
 }
 </script>
@@ -55,6 +54,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as dcmjs from 'dcmjs';
 
 class MarchingCubesHelper {
     static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
@@ -102,6 +102,92 @@ const huValSpan = document.getElementById('hu-val');
 const fileInput = document.getElementById('file-input');
 const btnUpload = document.getElementById('btn-upload');
 
+// 直接绑定全部UI事件，不再等待外部script加载
+btnUpload.onclick = ()=> fileInput.click();
+huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
+
+document.getElementById('rebuildIsoBtn').onclick = async ()=>{
+    if(!dicomVolume){alert("请先上传DICOM序列");return;}
+    statusText.innerText = "正在执行Marching‑Cubes";
+    const isoThresh = Number(huSlider.value);
+    if(volumeMesh) scene.remove(volumeMesh);
+    const geo = MarchingCubesHelper.createIsoSurface(dicomVolume.data,dicomVolume.width,dicomVolume.height,dicomVolume.depth,isoThresh);
+    const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
+    volumeMesh = new THREE.Mesh(geo, mat);
+    scene.add(volumeMesh);
+    const vertCount = geo.attributes.position?.count ?? 0;
+    statusText.innerText = `重建完成，顶点:${vertCount}`;
+    console.log("顶点数量:",vertCount);
+};
+
+document.getElementById('btn-reset').onclick = ()=>{
+    camera.position.set(120,120,180);
+    controls.reset();
+};
+document.getElementById('btn-hide').onclick = ()=>{
+    if(volumeMesh) volumeMesh.visible = !volumeMesh.visible;
+};
+document.getElementById('btn-rotate').onclick = ()=> rotateAnim = !rotateAnim;
+
+fileInput.onchange = async (e)=>{
+    statusText.innerText = "正在解析DICOM...";
+    const files = Array.from(e.target.files);
+    logText.innerText='';
+    const sliceList = [];
+    let dimX=null,dimY=null;
+
+    for(const f of files){
+        try{
+            const arrayBuf = await f.arrayBuffer();
+            const dataset = dcmjs.data.DicomMessage.readFile(arrayBuf);
+            const ds = dataset.dict;
+            const rows = ds.Rows;
+            const cols = ds.Columns;
+            if(!rows || !cols || !ds.PixelData){
+                logText.innerText += `跳过:${f.name} 无像素\n`;
+                continue;
+            }
+            dimX = cols;
+            dimY = rows;
+            const pixelArr = ds.PixelData;
+            const slope = ds.RescaleSlope ?? 1.0;
+            const intercept = ds.RescaleIntercept ?? 0.0;
+            const huArr = new Float32Array(pixelArr.length);
+            for(let i=0;i<pixelArr.length;i++){
+                huArr[i] = pixelArr[i] * slope + intercept;
+            }
+            const ipp = ds.ImagePositionPatient;
+            sliceList.push({
+                posZ: ipp ? ipp[2] : sliceList.length,
+                huData: huArr
+            });
+        }catch(err){
+            logText.innerText += `跳过:${f.name}\n`;
+            console.warn('文件解析失败',f.name,err);
+        }
+    }
+
+    if(sliceList.length===0){
+        statusText.innerText = "没有读到有效DICOM图像！";
+        alert("选中的文件全部不含像素图像，请选择CT切片dcm");
+        return;
+    }
+    sliceList.sort((a,b)=> a.posZ - b.posZ);
+    const totalVoxels = dimX * dimY * sliceList.length;
+    const volumeData = new Float32Array(totalVoxels);
+    for(let z=0; z<sliceList.length; z++){
+        const slice = sliceList[z];
+        volumeData.set(slice.huData, z * dimX * dimY);
+    }
+    dicomVolume = {
+        data: volumeData,
+        width: dimX,
+        height: dimY,
+        depth: sliceList.length
+    };
+    statusText.innerText = `加载完成: ${dimX}×${dimY}×${sliceList.length}`;
+};
+
 function initThree(){
     const container = document.getElementById('viewer-container');
     scene = new THREE.Scene();
@@ -131,116 +217,10 @@ function initThree(){
     animate();
 }
 
-// 轮询等待dcmjs全局对象就绪
-async function waitDcmjsReady(){
-    return new Promise(resolve=>{
-        function poll(){
-            if(window.dcmjs){
-                resolve(true);
-                return;
-            }
-            setTimeout(poll,150);
-        }
-        poll();
-    })
-}
-
-async function bindFileEvents(){
-    await waitDcmjsReady();
-    statusText.innerText = "等待上传DICOM";
-    console.log("✅ dcmjs加载完成", window.dcmjs);
-
-    btnUpload.onclick = ()=> fileInput.click();
-
-    fileInput.onchange = async (e)=>{
-        statusText.innerText = "正在解析DICOM...";
-        const files = Array.from(e.target.files);
-        logText.innerText='';
-        const sliceList = [];
-        let dimX=null,dimY=null;
-
-        for(const f of files){
-            try{
-                const arrayBuf = await f.arrayBuffer();
-                const dataset = dcmjs.data.DicomMessage.readFile(arrayBuf);
-                const ds = dataset.dict;
-                const rows = ds.Rows;
-                const cols = ds.Columns;
-                if(!rows || !cols || !ds.PixelData){
-                    logText.innerText += `跳过:${f.name} 无像素\n`;
-                    continue;
-                }
-                dimX = cols;
-                dimY = rows;
-                const pixelArr = ds.PixelData;
-                const slope = ds.RescaleSlope ?? 1.0;
-                const intercept = ds.RescaleIntercept ?? 0.0;
-                const huArr = new Float32Array(pixelArr.length);
-                for(let i=0;i<pixelArr.length;i++){
-                    huArr[i] = pixelArr[i] * slope + intercept;
-                }
-                const ipp = ds.ImagePositionPatient;
-                sliceList.push({
-                    posZ: ipp ? ipp[2] : sliceList.length,
-                    huData: huArr
-                });
-            }catch(err){
-                logText.innerText += `跳过:${f.name}\n`;
-                console.warn('文件解析失败',f.name,err);
-            }
-        }
-
-        if(sliceList.length===0){
-            statusText.innerText = "没有读到有效DICOM图像！";
-            alert("选中的文件全部不含像素图像，请选择CT切片dcm");
-            return;
-        }
-        sliceList.sort((a,b)=> a.posZ - b.posZ);
-        const totalVoxels = dimX * dimY * sliceList.length;
-        const volumeData = new Float32Array(totalVoxels);
-        for(let z=0; z<sliceList.length; z++){
-            const slice = sliceList[z];
-            volumeData.set(slice.huData, z * dimX * dimY);
-        }
-        dicomVolume = {
-            data: volumeData,
-            width: dimX,
-            height: dimY,
-            depth: sliceList.length
-        };
-        statusText.innerText = `加载完成: ${dimX}×${dimY}×${sliceList.length}`;
-    };
-
-    huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
-
-    document.getElementById('rebuildIsoBtn').onclick = async ()=>{
-        if(!dicomVolume){alert("请先上传DICOM序列");return;}
-        statusText.innerText = "正在执行Marching‑Cubes";
-        const isoThresh = Number(huSlider.value);
-        if(volumeMesh) scene.remove(volumeMesh);
-        const geo = MarchingCubesHelper.createIsoSurface(dicomVolume.data,dicomVolume.width,dicomVolume.height,dicomVolume.depth,isoThresh);
-        const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
-        volumeMesh = new THREE.Mesh(geo, mat);
-        scene.add(volumeMesh);
-        const vertCount = geo.attributes.position?.count ?? 0;
-        statusText.innerText = `重建完成，顶点:${vertCount}`;
-        console.log("顶点数量:",vertCount);
-    };
-
-    document.getElementById('btn-reset').onclick = ()=>{
-        camera.position.set(120,120,180);
-        controls.reset();
-    };
-    document.getElementById('btn-hide').onclick = ()=>{
-        if(volumeMesh) volumeMesh.visible = !volumeMesh.visible;
-    };
-    document.getElementById('btn-rotate').onclick = ()=> rotateAnim = !rotateAnim;
-}
-
-window.addEventListener('load',async ()=>{
-    initThree();
-    await bindFileEvents();
-})
+// 启动
+initThree();
+statusText.innerText = "等待上传DICOM";
+console.log("✅ dcmjs模块加载成功",dcmjs);
 </script>
 </body>
 </html>

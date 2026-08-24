@@ -35,15 +35,14 @@
         <div>等值面HU阈值:<span id="hu-val">250</span></div>
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
-        <div id="status-text">初始化中...</div>
+        <div id="status-text">等待上传DICOM</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
     </div>
 </div>
 <div id="viewer-container"></div>
 
-<!-- 修复：包名是 cornerstone-core，不是 cornerstone -->
-<script src="https://cdn.jsdelivr.net/npm/cornerstone-core@2.6.1/dist/cornerstone.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
+<!-- dcmjs 专门浏览器本地解析DICOM -->
+<script src="https://cdn.jsdelivr.net/npm/dcmjs@0.33.0/dist/dcmjs.min.js"></script>
 
 <script type="importmap">
 {
@@ -132,54 +131,79 @@ function initThree(){
     animate();
 }
 
-function initCornerstone(){
-    if(!window.cornerstone || !window.cornerstoneWADOImageLoader){
-        statusText.innerText = "等待cornerstone库加载...";
-        setTimeout(initCornerstone,200);
-        return;
-    }
-    cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
-    cornerstoneWADOImageLoader.configure({useWebWorkers:false});
-    statusText.innerText = "等待上传DICOM";
-    console.log("cornerstone初始化成功", typeof cornerstone, typeof cornerstoneWADOImageLoader);
-}
-
 document.getElementById('btn-upload').onclick = ()=>document.getElementById('file-input').click();
 
+// dcmjs本地解析DICOM文件
 document.getElementById('file-input').onchange = async (e)=>{
     statusText.innerText = "正在解析DICOM...";
     const files = Array.from(e.target.files);
-    const volumeVoxels = [];
-    let dimX=null,dimY=null;
-    let validFileCount=0;
     logText.innerText='';
+
+    // 读取所有切片，保存实例号用于排序
+    const sliceList = [];
+    let dimX=null,dimY=null;
+
     for(const f of files){
         try{
             const arrayBuf = await f.arrayBuffer();
-            const image = await cornerstoneWADOImageLoader.createImage(arrayBuf);
-            dimX = image.width;
-            dimY = image.height;
-            const pxData = image.getPixelData();
-            if(!pxData) throw new Error("无像素");
-            validFileCount++;
-            volumeVoxels.push(...pxData);
+            const dataset = dcmjs.data.DicomMessage.readFile(arrayBuf);
+            const meta = dataset.meta;
+            const ds = dataset.dict;
+
+            const rows = ds.Rows;
+            const cols = ds.Columns;
+            if(!rows || !cols || !ds.PixelData){
+                logText.innerText += `跳过:${f.name} 无像素\n`;
+                continue;
+            }
+            dimX = cols;
+            dimY = rows;
+
+            // 像素数组 + RescaleSlope / RescaleIntercept 转HU值
+            const pixelArr = ds.PixelData;
+            const slope = ds.RescaleSlope ?? 1.0;
+            const intercept = ds.RescaleIntercept ?? 0.0;
+            const huArr = new Float32Array(pixelArr.length);
+            for(let i=0;i<pixelArr.length;i++){
+                huArr[i] = pixelArr[i] * slope + intercept;
+            }
+
+            // 获取切片位置，用于Z轴排序
+            const ipp = ds.ImagePositionPatient;
+            sliceList.push({
+                posZ: ipp ? ipp[2] : sliceList.length,
+                huData: huArr
+            });
         }catch(err){
             logText.innerText += `跳过:${f.name}\n`;
-            console.warn('跳过dcm',f.name,err);
+            console.warn('文件解析失败',f.name,err);
         }
     }
-    if(validFileCount===0){
+
+    if(sliceList.length===0){
         statusText.innerText = "没有读到有效DICOM图像！";
         alert("选中的文件全部不含像素图像，请选择CT切片dcm");
         return;
     }
+
+    // 根据Z轴位置排序切片
+    sliceList.sort((a,b)=> a.posZ - b.posZ);
+
+    // 拼接完整体数据
+    const totalVoxels = dimX * dimY * sliceList.length;
+    const volumeData = new Float32Array(totalVoxels);
+    for(let z=0; z<sliceList.length; z++){
+        const slice = sliceList[z];
+        volumeData.set(slice.huData, z * dimX * dimY);
+    }
+
     dicomVolume = {
-        data: new Float32Array(volumeVoxels),
+        data: volumeData,
         width: dimX,
         height: dimY,
-        depth: validFileCount
+        depth: sliceList.length
     };
-    statusText.innerText = `加载完成: ${dimX}×${dimY}×${validFileCount}`;
+    statusText.innerText = `加载完成: ${dimX}×${dimY}×${sliceList.length}`;
 };
 
 huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
@@ -209,7 +233,6 @@ document.getElementById('btn-rotate').onclick = ()=> rotateAnim = !rotateAnim;
 
 window.addEventListener('load',()=>{
     initThree();
-    initCornerstone();
 })
 </script>
 </body>

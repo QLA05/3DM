@@ -14,7 +14,6 @@
         .cyan{background:#17a2b8;}
         .orange{background:#fd7e14;}
         .purple{background:#6f42c1;}
-        .red{background:#dc3545;}
         .control-block{margin:12px 0;padding:10px;background:white;border-radius:6px;}
         input[type="range"]{width:100%;}
     </style>
@@ -37,16 +36,15 @@
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
-        <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;"></div>
+        <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
     </div>
 </div>
 <div id="viewer-container"></div>
 
-<!-- 1. Cornerstone UMD 普通script标签，全局加载，解决404 -->
+<!-- UMD库 普通script，全局对象 -->
 <script src="https://cdn.jsdelivr.net/npm/cornerstone@7.2.8/dist/cornerstone.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
 
-<!-- 2. Threejs ESM importmap，解决OrbitControls -->
 <script type="importmap">
 {
   "imports": {
@@ -60,13 +58,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-
-// ---------------------- 内置简易Marching Cubes ----------------------
+// ---------------------- 简易Marching Cubes ----------------------
 class MarchingCubesHelper {
     static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
         const geometry = new THREE.BufferGeometry();
         const vertices = [];
-
         for(let z=0; z<dimZ-1; z++){
             for(let y=0; y<dimY-1; y++){
                 for(let x=0; x<dimX-1; x++){
@@ -79,21 +75,14 @@ class MarchingCubesHelper {
                     const v5 = voxelData[idx0 + dimX*dimY +1];
                     const v6 = voxelData[idx0 + dimX*dimY + dimX];
                     const v7 = voxelData[idx0 + dimX*dimY + dimX +1];
-
                     const cubeValues = [v0,v1,v3,v2,v4,v5,v7,v6];
                     let insideCount = 0;
                     cubeValues.forEach(v=>{ if(v>isoValue) insideCount++; });
                     if(insideCount>0 && insideCount<8){
                         const sx = x, sy=y, sz=z;
                         vertices.push(
-                            sx, sy, sz,
-                            sx+1, sy, sz,
-                            sx, sy+1, sz,
-                            sx+1, sy+1, sz,
-                            sx, sy, sz+1,
-                            sx+1, sy, sz+1,
-                            sx, sy+1, sz+1,
-                            sx+1, sy+1, sz+1
+                            sx, sy, sz, sx+1, sy, sz, sx, sy+1, sz, sx+1, sy+1, sz,
+                            sx, sy, sz+1, sx+1, sy, sz+1, sx, sy+1, sz+1, sx+1, sy+1, sz+1
                         );
                     }
                 }
@@ -105,7 +94,6 @@ class MarchingCubesHelper {
     }
 }
 
-// 全局变量
 let scene, camera, renderer, controls;
 let dicomVolume = null;
 let volumeMesh = null;
@@ -115,53 +103,49 @@ const logText = document.getElementById('log-text');
 const huSlider = document.getElementById('hu-slider');
 const huValSpan = document.getElementById('hu-val');
 
-// three初始化
 function initThree(){
     const container = document.getElementById('viewer-container');
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0xeeeeee);
     camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1,5000);
     camera.position.set(120,120,180);
-
     renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
-
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-
     const light1 = new THREE.DirectionalLight(0xffffff, 1);
     light1.position.set(100,100,100);
     scene.add(light1);
     scene.add(new THREE.AmbientLight(0xffffff,0.4));
-
     window.addEventListener('resize',()=>{
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(container.clientWidth, container.clientHeight);
     });
-
     function animate(){
         requestAnimationFrame(animate);
-        if(rotateAnim && volumeMesh){
-            volumeMesh.rotation.y +=0.005;
-        }
+        if(rotateAnim && volumeMesh) volumeMesh.rotation.y +=0.005;
         controls.update();
         renderer.render(scene,camera);
     }
     animate();
 }
 
-// cornerstone初始化
 function initCornerstone(){
+    // 必须确认全局对象存在
+    if(!window.cornerstone || !window.cornerstoneWADOImageLoader){
+        statusText.innerText = "等待cornerstone库加载...";
+        setTimeout(initCornerstone,200);
+        return;
+    }
     cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
     cornerstoneWADOImageLoader.configure({useWebWorkers:false});
+    statusText.innerText = "等待上传DICOM";
 }
 
 // UI事件
-document.getElementById('btn-upload').onclick = ()=>{
-    document.getElementById('file-input').click();
-};
+document.getElementById('btn-upload').onclick = ()=>document.getElementById('file-input').click();
 
 document.getElementById('file-input').onchange = async (e)=>{
     statusText.innerText = "正在解析DICOM...";
@@ -170,7 +154,6 @@ document.getElementById('file-input').onchange = async (e)=>{
     let dimX=null,dimY=null;
     let validFileCount=0;
     logText.innerText='';
-
     for(const f of files){
         try{
             const arrayBuf = await f.arrayBuffer();
@@ -178,23 +161,19 @@ document.getElementById('file-input').onchange = async (e)=>{
             dimX = image.width;
             dimY = image.height;
             const pxData = image.getPixelData();
-            if(!pxData) continue;
+            if(!pxData) throw new Error("无像素");
             validFileCount++;
-            for(let i=0;i<pxData.length;i++){
-                volumeVoxels.push(pxData[i]);
-            }
+            volumeVoxels.push(...pxData);
         }catch(err){
-            logText.innerText += `跳过文件:${f.name}\n`;
-            console.warn('跳过无效dcm',f.name,err);
+            logText.innerText += `跳过:${f.name}\n`;
+            console.warn('跳过dcm',f.name,err);
         }
     }
-
     if(validFileCount===0){
         statusText.innerText = "没有读到有效DICOM图像！";
         alert("选中的文件全部不含像素图像，请选择CT切片dcm，不要选报告/结构化dcm");
         return;
     }
-
     dicomVolume = {
         data: new Float32Array(volumeVoxels),
         width: dimX,
@@ -204,27 +183,14 @@ document.getElementById('file-input').onchange = async (e)=>{
     statusText.innerText = `加载完成: ${dimX}×${dimY}×${validFileCount}`;
 };
 
-huSlider.oninput = ()=>{
-    huValSpan.innerText = huSlider.value;
-};
+huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
 
-// 重建按钮
 document.getElementById('rebuildIsoBtn').onclick = async ()=>{
-    if(!dicomVolume){
-        alert("请先上传DICOM序列");
-        return;
-    }
+    if(!dicomVolume){alert("请先上传DICOM序列");return;}
     statusText.innerText = "正在执行Marching‑Cubes";
     const isoThresh = Number(huSlider.value);
     if(volumeMesh) scene.remove(volumeMesh);
-
-    const geo = MarchingCubesHelper.createIsoSurface(
-        dicomVolume.data,
-        dicomVolume.width,
-        dicomVolume.height,
-        dicomVolume.depth,
-        isoThresh
-    );
+    const geo = MarchingCubesHelper.createIsoSurface(dicomVolume.data,dicomVolume.width,dicomVolume.height,dicomVolume.depth,isoThresh);
     const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
     volumeMesh = new THREE.Mesh(geo, mat);
     scene.add(volumeMesh);
@@ -240,12 +206,13 @@ document.getElementById('btn-reset').onclick = ()=>{
 document.getElementById('btn-hide').onclick = ()=>{
     if(volumeMesh) volumeMesh.visible = !volumeMesh.visible;
 };
-document.getElementById('btn-rotate').onclick = ()=>{
-    rotateAnim = !rotateAnim;
-};
+document.getElementById('btn-rotate').onclick = ()=> rotateAnim = !rotateAnim;
 
-initThree();
-initCornerstone();
+// 页面全部加载完成，再启动
+window.addEventListener('load',()=>{
+    initThree();
+    initCornerstone();
+})
 </script>
 </body>
 </html>

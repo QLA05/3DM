@@ -46,7 +46,7 @@
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-    "dcmjs": "https://cdn.jsdelivr.net/npm/dcmjs@0.33.0/+esm"
+    "dicom-parser": "https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/+esm"
   }
 }
 </script>
@@ -54,7 +54,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import * as dcmjs from 'dcmjs';
+import * as dicomParser from 'dicom-parser';
 
 class MarchingCubesHelper {
     static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
@@ -138,31 +138,37 @@ fileInput.onchange = async (e)=>{
     for(const f of files){
         try{
             const arrayBuf = await f.arrayBuffer();
-            // dcmjs读取文件
-            const dataset = dcmjs.data.DicomMessage.readFile(arrayBuf);
-            const ds = dataset.dict;
-            const rows = ds.Rows;
-            const cols = ds.Columns;
+            const byteArray = new Uint8Array(arrayBuf);
+            const dataSet = dicomParser.parseDicom(byteArray);
 
-            // 重点修复：像素数据在dataset.pixelData，不在dict！
-            const pixelData = dataset.pixelData;
+            const rows = dataSet.uint16('x00280010');
+            const cols = dataSet.uint16('x00280011');
+            const pixelDataElement = dataSet.elements.x7fe00010;
 
-            if(!rows || !cols || !pixelData){
+            if(!rows || !cols || !pixelDataElement || !pixelDataElement.length){
                 logText.innerText += `跳过:${f.name} 无像素\n`;
                 continue;
             }
             dimX = cols;
             dimY = rows;
 
-            const slope = ds.RescaleSlope ?? 1.0;
-            const intercept = ds.RescaleIntercept ?? 0.0;
-            const huArr = new Float32Array(pixelData.length);
-            for(let i=0;i<pixelData.length;i++){
-                huArr[i] = pixelData[i] * slope + intercept;
+            // 读取像素缓冲区
+            const pixelBuffer = new Uint16Array(
+                byteArray.buffer,
+                pixelDataElement.dataOffset,
+                pixelDataElement.length / 2
+            );
+
+            const slope = dataSet.floatString('x00281053') ?? 1.0;
+            const intercept = dataSet.floatString('x00281052') ?? 0.0;
+            const huArr = new Float32Array(pixelBuffer.length);
+            for(let i=0;i<pixelBuffer.length;i++){
+                huArr[i] = pixelBuffer[i] * slope + intercept;
             }
-            const ipp = ds.ImagePositionPatient;
+
+            const posZ = dataSet.floatString('x00200032',2) ?? sliceList.length;
             sliceList.push({
-                posZ: ipp ? ipp[2] : sliceList.length,
+                posZ: posZ,
                 huData: huArr
             });
         }catch(err){
@@ -222,7 +228,7 @@ function initThree(){
 }
 
 initThree();
-console.log("✅ dcmjs模块加载成功",dcmjs);
+console.log("✅ dicom‑parser模块加载成功");
 </script>
 </body>
 </html>

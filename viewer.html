@@ -37,26 +37,35 @@
         <input type="range" id="hu-slider" min="100" max="1200" value="250">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
+        <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;"></div>
     </div>
 </div>
 <div id="viewer-container"></div>
 
-<!-- 依赖CDN -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cornerstone@7.2.8/dist/cornerstone.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
+<!-- 修复CDN：使用ESM版本，importmap 解决OrbitControls全局丢失问题 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 
-<script>
-// ---------------------- 内置简易Marching Cubes实现，不再依赖外部库！解决 undefined marchingCubes 报错 ----------------------
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// cornerstone 外部umd脚本
+await import('https://cdn.jsdelivr.net/npm/cornerstone@7.2.8/dist/cornerstone.min.js');
+await import('https://cdn.jsdelivr.net/npm/cornerstone-wado-image-loader@4.13.2/dist/cornerstoneWADOImageLoader.bundle.min.js');
+
+// ---------------------- 内置简易Marching Cubes ----------------------
 class MarchingCubesHelper {
     static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
         const geometry = new THREE.BufferGeometry();
         const vertices = [];
-        const normals = [];
-        const indices = [];
 
-        // 简化体素遍历
         for(let z=0; z<dimZ-1; z++){
             for(let y=0; y<dimY-1; y++){
                 for(let x=0; x<dimX-1; x++){
@@ -71,8 +80,6 @@ class MarchingCubesHelper {
                     const v7 = voxelData[idx0 + dimX*dimY + dimX +1];
 
                     const cubeValues = [v0,v1,v3,v2,v4,v5,v7,v6];
-                    const pos = new THREE.Vector3(x,y,z);
-                    // 简易阈值筛选，采样生成面片
                     let insideCount = 0;
                     cubeValues.forEach(v=>{ if(v>isoValue) insideCount++; });
                     if(insideCount>0 && insideCount<8){
@@ -103,6 +110,7 @@ let dicomVolume = null;
 let volumeMesh = null;
 let rotateAnim = false;
 const statusText = document.getElementById('status-text');
+const logText = document.getElementById('log-text');
 const huSlider = document.getElementById('hu-slider');
 const huValSpan = document.getElementById('hu-val');
 
@@ -118,7 +126,7 @@ function initThree(){
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
-    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
     const light1 = new THREE.DirectionalLight(0xffffff, 1);
@@ -158,30 +166,48 @@ document.getElementById('file-input').onchange = async (e)=>{
     statusText.innerText = "正在解析DICOM...";
     const files = Array.from(e.target.files);
     const volumeVoxels = [];
-    let dimX,dimY;
+    let dimX=null,dimY=null;
+    let validFileCount=0;
+    logText.innerText='';
+
     for(const f of files){
-        const arrayBuf = await f.arrayBuffer();
-        const image = await cornerstoneWADOImageLoader.createImage(arrayBuf);
-        dimX = image.width;
-        dimY = image.height;
-        for(let i=0;i<image.getPixelData().length;i++){
-            volumeVoxels.push(image.getPixelData()[i]);
+        try{
+            const arrayBuf = await f.arrayBuffer();
+            const image = await cornerstoneWADOImageLoader.createImage(arrayBuf);
+            dimX = image.width;
+            dimY = image.height;
+            const pxData = image.getPixelData();
+            if(!pxData) continue;
+            validFileCount++;
+            for(let i=0;i<pxData.length;i++){
+                volumeVoxels.push(pxData[i]);
+            }
+        }catch(err){
+            logText.innerText += `跳过文件:${f.name}\n`;
+            console.warn('跳过无效dcm',f.name,err);
         }
     }
+
+    if(validFileCount===0){
+        statusText.innerText = "没有读到有效DICOM图像！";
+        alert("选中的文件全部不含像素图像，请选择CT切片dcm，不要选报告/结构化dcm");
+        return;
+    }
+
     dicomVolume = {
         data: new Float32Array(volumeVoxels),
         width: dimX,
         height: dimY,
-        depth: files.length
+        depth: validFileCount
     };
-    statusText.innerText = `加载完成: ${dimX}×${dimY}×${files.length}`;
+    statusText.innerText = `加载完成: ${dimX}×${dimY}×${validFileCount}`;
 };
 
 huSlider.oninput = ()=>{
     huValSpan.innerText = huSlider.value;
 };
 
-// 【重建按钮】现在调用我们内置的MarchingCubesHelper，彻底消除 marchingCubes undefined
+// 重建按钮
 document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     if(!dicomVolume){
         alert("请先上传DICOM序列");
@@ -191,7 +217,6 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     const isoThresh = Number(huSlider.value);
     if(volumeMesh) scene.remove(volumeMesh);
 
-    // 使用本地内置算法，不再读取外部库对象
     const geo = MarchingCubesHelper.createIsoSurface(
         dicomVolume.data,
         dicomVolume.width,
@@ -202,8 +227,9 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
     volumeMesh = new THREE.Mesh(geo, mat);
     scene.add(volumeMesh);
-    statusText.innerText = "重建完成";
-    console.log("顶点数量:", geo.attributes.position.count);
+    const vertCount = geo.attributes.position?.count ?? 0;
+    statusText.innerText = `重建完成，顶点:${vertCount}`;
+    console.log("顶点数量:",vertCount);
 };
 
 document.getElementById('btn-reset').onclick = ()=>{

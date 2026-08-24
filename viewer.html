@@ -41,12 +41,14 @@
 </div>
 <div id="viewer-container"></div>
 
+<!-- UMD全局引入 dicom‑parser -->
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-    "dicom-parser": "https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/+esm"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
   }
 }
 </script>
@@ -54,7 +56,6 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import * as dicomParser from 'dicom-parser';
 
 class MarchingCubesHelper {
     static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
@@ -139,6 +140,7 @@ fileInput.onchange = async (e)=>{
         try{
             const arrayBuf = await f.arrayBuffer();
             const byteArray = new Uint8Array(arrayBuf);
+            // 全局变量dicomParser
             const dataSet = dicomParser.parseDicom(byteArray);
 
             const rows = dataSet.uint16('x00280010');
@@ -152,7 +154,6 @@ fileInput.onchange = async (e)=>{
             dimX = cols;
             dimY = rows;
 
-            // 读取像素缓冲区
             const pixelBuffer = new Uint16Array(
                 byteArray.buffer,
                 pixelDataElement.dataOffset,
@@ -172,7 +173,7 @@ fileInput.onchange = async (e)=>{
                 huData: huArr
             });
         }catch(err){
-            logText.innerText += `跳过:${f.name}\n`;
+            logText.innerText += `文件解析失败:${f.name}\n`;
             console.warn('文件解析失败',f.name,err);
         }
     }
@@ -228,7 +229,7 @@ function initThree(){
 }
 
 initThree();
-console.log("✅ dicom‑parser模块加载成功");
+console.log("✅ dicom‑parser已加载");
 </script>
 </body>
 </html>

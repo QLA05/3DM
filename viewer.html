@@ -32,8 +32,8 @@
     </div>
 
     <div class="control-block">
-        <div>等值面HU阈值:<span id="hu-val">250</span></div>
-        <input type="range" id="hu-slider" min="100" max="1200" value="250">
+        <div>等值面HU阈值:<span id="hu-val">176</span></div>
+        <input type="range" id="hu-slider" min="100" max="1200" value="176">
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
@@ -55,47 +55,12 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-class MarchingCubesHelper {
-    static createIsoSurface(voxelData, dimX, dimY, dimZ, isoValue) {
-        const geometry = new THREE.BufferGeometry();
-        const vertices = [];
-        for(let z=0; z<dimZ-1; z++){
-            for(let y=0; y<dimY-1; y++){
-                for(let x=0; x<dimX-1; x++){
-                    const idx0 = z*dimX*dimY + y*dimX + x;
-                    const v0 = voxelData[idx0];
-                    const v1 = voxelData[idx0+1];
-                    const v2 = voxelData[idx0 + dimX];
-                    const v3 = voxelData[idx0 + dimX +1];
-                    const v4 = voxelData[idx0 + dimX*dimY];
-                    const v5 = voxelData[idx0 + dimX*dimY +1];
-                    const v6 = voxelData[idx0 + dimX*dimY + dimX];
-                    const v7 = voxelData[idx0 + dimX*dimY + dimX +1];
-                    const cubeValues = [v0,v1,v3,v2,v4,v5,v7,v6];
-                    let insideCount = 0;
-                    cubeValues.forEach(v=>{ if(v>isoValue) insideCount++; });
-                    if(insideCount>0 && insideCount<8){
-                        const sx = x, sy=y, sz=z;
-                        vertices.push(
-                            sx, sy, sz, sx+1, sy, sz, sx, sy+1, sz, sx+1, sy+1, sz,
-                            sx, sy, sz+1, sx+1, sy, sz+1, sx, sy+1, sz+1, sx+1, sy+1, sz+1
-                        );
-                    }
-                }
-            }
-        }
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
-        geometry.computeVertexNormals();
-        return geometry;
-    }
-}
+import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 
 let scene, camera, renderer, controls;
 let dicomVolume = null;
 let volumeMesh = null;
 let rotateAnim = false;
-// 保存像素间距
 let pixelSpacing = [1.0,1.0];
 let sliceThickness = 1.0;
 
@@ -111,31 +76,41 @@ huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
 
 document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     if(!dicomVolume){alert("请先上传DICOM序列");return;}
-    statusText.innerText = "正在执行Marching‑Cubes";
+    statusText.innerText = "正在执行Marching‑Cubes平滑重建";
     const isoThresh = Number(huSlider.value);
     if(volumeMesh) scene.remove(volumeMesh);
-    const geo = MarchingCubesHelper.createIsoSurface(dicomVolume.data,dicomVolume.width,dicomVolume.height,dicomVolume.depth,isoThresh);
-    const mat = new THREE.MeshPhongMaterial({color:0xcccccc});
-    volumeMesh = new THREE.Mesh(geo, mat);
 
-    // 缩放：使用dicom真实像素间距
+    const {width,height,depth,data} = dicomVolume;
+    const mc = new MarchingCubes(width, height, depth, null, false, false);
+    // 填充体素数据
+    for(let z=0;z<depth;z++){
+        for(let y=0;y<height;y++){
+            for(let x=0;x<width;x++){
+                const idx = z*width*height + y*width + x;
+                mc.setVoxel(x,y,z, data[idx] > isoThresh ? 1.0 : 0.0);
+            }
+        }
+    }
+    mc.update();
+    volumeMesh = mc;
+
     volumeMesh.scale.set(pixelSpacing[0], pixelSpacing[1], sliceThickness);
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-
-    // 模型居中
-    const box = geo.boundingBox;
+    volumeMesh.geometry.computeBoundingBox();
+    volumeMesh.geometry.computeBoundingSphere();
+    const box = volumeMesh.geometry.boundingBox;
     const center = new THREE.Vector3();
     box.getCenter(center);
     volumeMesh.position.copy(center).multiplyScalar(-1);
 
+    const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
+    volumeMesh.material = mat;
     scene.add(volumeMesh);
-    const vertCount = geo.attributes.position?.count ?? 0;
+
+    const vertCount = volumeMesh.geometry.attributes.position?.count ?? 0;
     statusText.innerText = `重建完成，顶点:${vertCount}`;
     console.log("顶点数量:",vertCount);
 
-    // 相机自动看向模型
-    const sphere = geo.boundingSphere;
+    const sphere = volumeMesh.geometry.boundingSphere;
     const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
     camera.position.set(radius*1.5, radius*1.5, radius*1.5);
     controls.target.set(0,0,0);
@@ -182,7 +157,6 @@ fileInput.onchange = async (e)=>{
             dimX = cols;
             dimY = rows;
 
-            //读取像素间距
             const spacingStr = dataSet.string('x00280030');
             if(spacingStr){
                 const sp = spacingStr.split('\\').map(Number);
@@ -250,7 +224,7 @@ function initThree(){
     const light1 = new THREE.DirectionalLight(0xffffff, 1);
     light1.position.set(200,200,200);
     scene.add(light1);
-    scene.add(new THREE.AmbientLight(0xffffff,0.5));
+    scene.add(new THREE.AmbientLight(0xffffff,0.6));
     window.addEventListener('resize',()=>{
         camera.aspect = container.clientWidth / container.clientHeight;
         camera.updateProjectionMatrix();

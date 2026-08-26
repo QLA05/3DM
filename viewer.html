@@ -26,8 +26,6 @@
         <button class="btn blue" id="btn-reset">复位视角</button>
         <button class="btn cyan" id="btn-hide">隐藏</button>
         <button class="btn orange" id="btn-rotate">旋转</button>
-        <button class="btn purple" id="btn-qrcode">生成访问二维码</button>
-        <button class="btn orange" id="btn-anim">播放动画</button>
     </div>
     <div class="control-block">
         <div>等值面HU阈值:<span id="hu-val">250</span></div>
@@ -54,6 +52,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// MC表内联给Worker
 const edgeTable = new Uint16Array([
 0x0,0x109,0x203,0x30a,0x406,0x50f,0x605,0x70c,0x80c,0x905,0xa0f,0xb06,0xc0a,0xd03,0xe09,0xf00,
 0x190,0x99,0x393,0x29a,0x596,0x49f,0x795,0x69c,0x99c,0x895,0xb9f,0xa96,0xd9a,0xc93,0xf99,0xe90,
@@ -72,7 +71,6 @@ const edgeTable = new Uint16Array([
 0xe90,0xf99,0xc93,0xd9a,0xa96,0xb9f,0x895,0x99c,0x69c,0x795,0x49f,0x596,0x29a,0x393,0x99,0x190,
 0xf00,0xe09,0xd03,0xc0a,0xb06,0xa0f,0x905,0x80c,0x70c,0x605,0x50f,0x406,0x30a,0x203,0x109,0x0
 ]);
-
 const triTable = new Int8Array([
 -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
 0,8,3,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -189,27 +187,43 @@ const triTable = new Int8Array([
 7,11,0,7,6,11,6,10,11,-1,-1,-1,-1,-1,-1,-1
 ]);
 
-function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
-    const vert=[];
-    const idx=[];
-    const corner=[
-        [0,0,0],[1,0,0],[1,1,0],[0,1,0],
-        [0,0,1],[1,0,1],[1,1,1],[0,1,1]
-    ];
-    const edgeVert=[
-        [0,1],[1,2],[2,3],[3,0],
-        [4,5],[5,6],[6,7],[7,4],
-        [0,4],[1,5],[2,6],[3,7]
-    ];
-    function lerp(v0,v1,t){return v0+t*(v1-v0);}
-    function get(x,y,z){
-        if(x<0||x>=W||y<0||y>=H||z<0||z>=D) return -10000;
-        return volumeData[z*W*H + y*W + x];
+// 内联Worker代码，不需要独立worker.js文件
+const workerCode = `
+const edgeTable = new Uint16Array([${Array.from(edgeTable).join(',')}]);
+const triTable = new Int8Array([${Array.from(triTable).join(',')}]);
+
+self.onmessage = (e)=>{
+    const {W,H,D,volumeData,isolevel,invertThreshold,downSample} = e.data;
+    // 降采样
+    const ds = downSample;
+    const w = Math.floor(W/ds);
+    const h = Math.floor(H/ds);
+    const d = Math.floor(D/ds);
+    const sampled = new Float32Array(w*h*d);
+    for(let z=0;z<d;z++){
+        for(let y=0;y<h;y++){
+            for(let x=0;x<w;x++){
+                const ox = x*ds;
+                const oy = y*ds;
+                const oz = z*ds;
+                sampled[z*w*h + y*w + x] = volumeData[oz*W*H + oy*W + ox];
+            }
+        }
     }
 
-    for(let z=0;z<D-1;z++){
-        for(let y=0;y<H-1;y++){
-            for(let x=0;x<W-1;x++){
+    const vert=[];
+    const idx=[];
+    const corner=[[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]];
+    const edgeVert=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    function lerp(v0,v1,t){return v0+t*(v1-v0);}
+    function get(x,y,z){
+        if(x<0||x>=w||y<0||y>=h||z<0||z>=d) return -10000;
+        return sampled[z*w*h + y*w + x];
+    }
+
+    for(let z=0;z<d-1;z++){
+        for(let y=0;y<h-1;y++){
+            for(let x=0;x<w-1;x++){
                 const v=new Array(8);
                 for(let i=0;i<8;i++){
                     v[i]=get(x+corner[i][0], y+corner[i][1], z+corner[i][2]);
@@ -229,11 +243,7 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
                         if(Math.abs(denom) < 1e-6) continue;
                         const t=(isolevel-v[i0])/denom;
                         const p0=corner[i0], p1=corner[i1];
-                        pos[ei]=[
-                            lerp(x+p0[0],x+p1[0],t),
-                            lerp(y+p0[1],y+p1[1],t),
-                            lerp(z+p0[2],z+p1[2],t)
-                        ];
+                        pos[ei]=[lerp(x+p0[0],x+p1[0],t),lerp(y+p0[1],y+p1[1],t),lerp(z+p0[2],z+p1[2],t)];
                     }
                 }
                 const baseOffset = cube*16;
@@ -241,8 +251,7 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
                     const a=triTable[baseOffset+ti];
                     const b=triTable[baseOffset+ti+1];
                     const c=triTable[baseOffset+ti+2];
-                    // ✅防御：跳过pos未赋值的边，防止undefined[0]报错
-                    if(!pos[a] || !pos[b] || !pos[c]) continue;
+                    if(!pos[a]||!pos[b]||!pos[c]) continue;
                     const va=pos[a], vb=pos[b], vc=pos[c];
                     const base=vert.length/3;
                     vert.push(va[0],va[1],va[2], vb[0],vb[1],vb[2], vc[0],vc[1],vc[2]);
@@ -251,21 +260,17 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
             }
         }
     }
-    if(vert.length===0) return null;
-    const geo=new THREE.BufferGeometry();
-    geo.setAttribute('position',new THREE.Float32BufferAttribute(vert,3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    return geo;
+    self.postMessage({vert, idx, w,h,d, ds});
 }
+`;
 
-function getMinMax(arr){
-    let min=arr[0],max=arr[0];
-    for(let i=1;i<arr.length;i++){
-        if(arr[i]<min) min=arr[i];
-        if(arr[i]>max) max=arr[i];
-    }
-    return {min,max};
+let mcWorker = null;
+function createMCWorker(){
+    const blob = new Blob([workerCode], {type:'application/javascript'});
+    const url = URL.createObjectURL(blob);
+    const wk = new Worker(url);
+    wk.blobUrl = url;
+    return wk;
 }
 
 let scene, camera, renderer, controls;
@@ -282,49 +287,82 @@ const huValSpan = document.getElementById('hu-val');
 const fileInput = document.getElementById('file-input');
 const btnUpload = document.getElementById('btn-upload');
 const invCheck = document.getElementById('inv-check');
+const rebuildBtn = document.getElementById('rebuildIsoBtn');
 
 btnUpload.onclick = ()=> fileInput.click();
 huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
 
-document.getElementById('rebuildIsoBtn').onclick = async ()=>{
+rebuildBtn.onclick = async ()=>{
     if(!dicomVolume){alert("请先上传DICOM序列");return;}
+    rebuildBtn.disabled = true;
     const {width,height,depth,data} = dicomVolume;
-    const {min:minHu,max:maxHu} = getMinMax(data);
-    console.log("HU范围 min:",minHu,"max:",maxHu);
     const isoThresh = Number(huSlider.value);
     const invert = invCheck.checked;
-    statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh}`;
+    statusText.innerText = `后台重建中，请等待...`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    const geo = marchingCubes(width, height, depth, data, isoThresh, invert);
-    if(!geo){
-        statusText.innerText = `重建完成，顶点:0 ⚠️无模型，请调整HU阈值`;
-        return;
+    // 2倍降采样，512→256；如果还卡改成4
+    const downSample = 2;
+
+    if(mcWorker) mcWorker.terminate();
+    mcWorker = createMCWorker();
+
+    mcWorker.postMessage({
+        W:width, H:height, D:depth,
+        volumeData:data,
+        isolevel:isoThresh,
+        invertThreshold:invert,
+        downSample
+    });
+
+    mcWorker.onmessage = (e)=>{
+        const {vert, idx, ds} = e.data;
+        URL.revokeObjectURL(mcWorker.blobUrl);
+        mcWorker.terminate();
+        mcWorker=null;
+        rebuildBtn.disabled = false;
+
+        if(vert.length ===0){
+            statusText.innerText = `重建完成，顶点:0 ⚠️调整HU阈值`;
+            return;
+        }
+        const geo=new THREE.BufferGeometry();
+        geo.setAttribute('position',new THREE.Float32BufferAttribute(vert,3));
+        geo.setIndex(idx);
+        geo.computeVertexNormals();
+
+        const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
+        volumeMesh = new THREE.Mesh(geo,mat);
+        // 修正缩放，乘降采样系数
+        volumeMesh.scale.set(pixelSpacing[0]*ds, pixelSpacing[1]*ds, sliceThickness*ds);
+        geo.computeBoundingBox();
+        geo.computeBoundingSphere();
+        const box = geo.boundingBox;
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        volumeMesh.position.copy(center).multiplyScalar(-1);
+        scene.add(volumeMesh);
+        const vertCount = geo.attributes.position.count;
+        statusText.innerText = `重建完成，顶点:${vertCount}`;
+        console.log("顶点数量:",vertCount);
+        const sphere = geo.boundingSphere;
+        const radius = sphere.radius * Math.max(pixelSpacing[0]*ds,pixelSpacing[1]*ds,sliceThickness*ds);
+        camera.position.set(radius*1.5, radius*1.5, radius*1.5);
+        controls.target.set(0,0,0);
+        controls.update();
+    };
+    mcWorker.onerror = (err)=>{
+        statusText.innerText="重建出错！";
+        rebuildBtn.disabled=false;
+        console.error(err);
+        mcWorker?.terminate();
     }
-    const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
-    volumeMesh = new THREE.Mesh(geo,mat);
-    volumeMesh.scale.set(pixelSpacing[0], pixelSpacing[1], sliceThickness);
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    const box = geo.boundingBox;
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    volumeMesh.position.copy(center).multiplyScalar(-1);
-    scene.add(volumeMesh);
-    const vertCount = geo.attributes.position?.count ?? 0;
-    statusText.innerText = `重建完成，顶点:${vertCount}`;
-    console.log("顶点数量:",vertCount);
-    const sphere = geo.boundingSphere;
-    const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
-    camera.position.set(radius*1.5, radius*1.5, radius*1.5);
-    controls.target.set(0,0,0);
-    controls.update();
 };
 
 document.getElementById('btn-reset').onclick = ()=>{
     if(volumeMesh){
         const sphere = volumeMesh.geometry.boundingSphere;
-        const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
+        const radius = sphere.radius;
         camera.position.set(radius*1.5, radius*1.5, radius*1.5);
         controls.target.set(0,0,0);
     }else{

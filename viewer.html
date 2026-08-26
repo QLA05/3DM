@@ -6,7 +6,7 @@
     <style>
         *{margin:0;padding:0;box-sizing:border-box;}
         body{display:flex;height:100vh;font-family:system-ui;}
-        #ui-panel{width:320px;padding:12px;background:#f4f4f4;overflow:auto;}
+        #ui-panel{width:340px;padding:12px;background:#f4f4f4;overflow:auto;}
         #viewer-container{flex:1;position:relative;background:#eee;}
         .btn{padding:8px 12px;margin:4px;border:none;border-radius:4px;color:white;font-size:14px;cursor:pointer;}
         .green{background:#28a745;}
@@ -32,8 +32,9 @@
     </div>
 
     <div class="control-block">
-        <div>等值面HU阈值:<span id="hu-val">176</span></div>
-        <input type="range" id="hu-slider" min="0" max="1200" value="176">
+        <div>等值面HU阈值:<span id="hu-val">250</span></div>
+        <input type="range" id="hu-slider" min="-500" max="1200" value="250">
+        <label><input type="checkbox" id="inv-check">反转阈值(小于阈值为物体)</label>
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
@@ -191,7 +192,7 @@ const triTable = new Int8Array([
 7,11,0,7,6,11,6,10,11,-1,-1,-1,-1,-1,-1,-1
 ]);
 
-function marchingCubes(dataW,dataH,dataD,volumeData,isolevel){
+function marchingCubes(dataW,dataH,dataD,volumeData,isolevel,invertThreshold=false){
     const vert=[];
     const idx=[];
     const corner=[
@@ -206,8 +207,10 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel){
     function lerp(v0,v1,t){return v0+t*(v1-v0);}
     function get(x,y,z){
         if(x<0||x>=dataW||y<0||y>=dataH||z<0||z>=dataD) return -10000;
-        return volumeData[z*dataW*dataH+y*dataW+x];
+        const idx = z * dataW * dataH + y * dataW + x;
+        return volumeData[idx];
     }
+
     for(let z=0;z<dataD-1;z++){
         for(let y=0;y<dataH-1;y++){
             for(let x=0;x<dataW-1;x++){
@@ -217,14 +220,26 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel){
                     v[i]=get(cx,cy,cz);
                 }
                 let cube=0;
-                if(v[0]>isolevel)cube|=1;
-                if(v[1]>isolevel)cube|=2;
-                if(v[2]>isolevel)cube|=4;
-                if(v[3]>isolevel)cube|=8;
-                if(v[4]>isolevel)cube|=16;
-                if(v[5]>isolevel)cube|=32;
-                if(v[6]>isolevel)cube|=64;
-                if(v[7]>isolevel)cube|=128;
+                // 支持反转阈值
+                if(invertThreshold){
+                    if(v[0]<isolevel)cube|=1;
+                    if(v[1]<isolevel)cube|=2;
+                    if(v[2]<isolevel)cube|=4;
+                    if(v[3]<isolevel)cube|=8;
+                    if(v[4]<isolevel)cube|=16;
+                    if(v[5]<isolevel)cube|=32;
+                    if(v[6]<isolevel)cube|=64;
+                    if(v[7]<isolevel)cube|=128;
+                }else{
+                    if(v[0]>isolevel)cube|=1;
+                    if(v[1]>isolevel)cube|=2;
+                    if(v[2]>isolevel)cube|=4;
+                    if(v[3]>isolevel)cube|=8;
+                    if(v[4]>isolevel)cube|=16;
+                    if(v[5]>isolevel)cube|=32;
+                    if(v[6]>isolevel)cube|=64;
+                    if(v[7]>isolevel)cube|=128;
+                }
                 const bits=edgeTable[cube];
                 if(bits===0) continue;
                 const pos=new Array(12);
@@ -261,7 +276,7 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel){
     return geo;
 }
 
-// 大数组求min/max，禁止展开运算符
+// 大数组求min/max
 function getMinMax(arr){
     let min=arr[0],max=arr[0];
     for(let i=1;i<arr.length;i++){
@@ -284,6 +299,7 @@ const huSlider = document.getElementById('hu-slider');
 const huValSpan = document.getElementById('hu-val');
 const fileInput = document.getElementById('file-input');
 const btnUpload = document.getElementById('btn-upload');
+const invCheck = document.getElementById('inv-check');
 
 btnUpload.onclick = ()=> fileInput.click();
 huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
@@ -294,12 +310,20 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     const {min:minHu,max:maxHu} = getMinMax(data);
     console.log("HU范围 min:",minHu,"max:",maxHu);
     const isoThresh = Number(huSlider.value);
-    statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh}`;
+    const invert = invCheck.checked;
+    statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh} 反转:${invert}`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    const geo = marchingCubes(width,height,depth,data,isoThresh);
+    // 统计数组内大于阈值的体素数量（调试关键）
+    let countOver=0;
+    for(let i=0;i<data.length;i++){
+        if(data[i]>isoThresh) countOver++;
+    }
+    console.log(`大于阈值${isoThresh}体素数量：${countOver} / ${data.length}`);
+
+    const geo = marchingCubes(width,height,depth,data,isoThresh,invert);
     if(!geo){
-        statusText.innerText = `重建完成，顶点:0 ⚠️阈值过高，无模型，请降低HU阈值`;
+        statusText.innerText = `重建完成，顶点:0 ⚠️阈值不合适，大于阈值体素${countOver}，无模型，请调整HU阈值`;
         return;
     }
 
@@ -402,15 +426,16 @@ fileInput.onchange = async (e)=>{
         return;
     }
     sliceList.sort((a,b)=> a.posZ - b.posZ);
-    const totalVoxels = dimX * dimY * sliceList.length;
+    const depth = sliceList.length;
+    const totalVoxels = dimX * dimY * depth;
     const volumeData = new Float32Array(totalVoxels);
-    for(let z=0; z<sliceList.length; z++){
+    for(let z=0; z<depth; z++){
         const slice = sliceList[z];
         const offset = z * dimX * dimY;
         volumeData.set(slice.huData, offset);
     }
-    dicomVolume = {data: volumeData, width: dimX, height: dimY, depth: sliceList.length};
-    statusText.innerText = `加载完成: ${dimX}×${dimY}×${sliceList.length}`;
+    dicomVolume = {data: volumeData, width: dimX, height: dimY, depth: depth};
+    statusText.innerText = `加载完成: ${dimX}×${dimY}×${depth}`;
 };
 
 function initThree(){

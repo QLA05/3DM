@@ -260,7 +260,16 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel){
     geo.computeVertexNormals();
     return geo;
 }
-// ====================== END MC ======================
+
+// 大数组求min/max，禁止展开运算符
+function getMinMax(arr){
+    let min=arr[0],max=arr[0];
+    for(let i=1;i<arr.length;i++){
+        if(arr[i]<min) min=arr[i];
+        if(arr[i]>max) max=arr[i];
+    }
+    return {min,max};
+}
 
 let scene, camera, renderer, controls;
 let dicomVolume = null;
@@ -282,8 +291,7 @@ huSlider.oninput = ()=>huValSpan.innerText = huSlider.value;
 document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     if(!dicomVolume){alert("请先上传DICOM序列");return;}
     const {width,height,depth,data} = dicomVolume;
-    const minHu = Math.min(...data);
-    const maxHu = Math.max(...data);
+    const {min:minHu,max:maxHu} = getMinMax(data);
     console.log("HU范围 min:",minHu,"max:",maxHu);
     const isoThresh = Number(huSlider.value);
     statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh}`;
@@ -375,7 +383,6 @@ fileInput.onchange = async (e)=>{
 
             const slope = dataSet.floatString('x00281053') ?? 1.0;
             const intercept = dataSet.floatString('x00281052') ?? 0.0;
-            // 转换HU
             const huArr = new Float32Array(pixelBuffer.length);
             for(let i=0;i<pixelBuffer.length;i++){
                 huArr[i] = pixelBuffer[i] * slope + intercept;
@@ -397,10 +404,8 @@ fileInput.onchange = async (e)=>{
     sliceList.sort((a,b)=> a.posZ - b.posZ);
     const totalVoxels = dimX * dimY * sliceList.length;
     const volumeData = new Float32Array(totalVoxels);
-    // 填充体素 z维度
     for(let z=0; z<sliceList.length; z++){
         const slice = sliceList[z];
-        // slice.huData: [y*dimX + x]
         const offset = z * dimX * dimY;
         volumeData.set(slice.huData, offset);
     }

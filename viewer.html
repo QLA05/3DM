@@ -22,7 +22,6 @@
 <div id="ui-panel">
     <input type="file" id="file-input" multiple accept=".dcm" style="display:none;">
     <button class="btn green" id="btn-upload">上传DICOM(.dcm)序列</button>
-
     <div>
         <button class="btn blue" id="btn-reset">复位视角</button>
         <button class="btn cyan" id="btn-hide">隐藏</button>
@@ -30,11 +29,10 @@
         <button class="btn purple" id="btn-qrcode">生成访问二维码</button>
         <button class="btn orange" id="btn-anim">播放动画</button>
     </div>
-
     <div class="control-block">
-        <div>等值面HU阈值:<span id="hu-val">81</span></div>
-        <input type="range" id="hu-slider" min="-500" max="1200" value="81">
-        <label><input type="checkbox" id="inv-check">反转阈值(小于阈值为物体)</label>
+        <div>等值面HU阈值:<span id="hu-val">250</span></div>
+        <input type="range" id="hu-slider" min="-500" max="1200" value="250">
+        <label><input type="checkbox" id="inv-check">反转阈值</label>
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
         <div id="log-text" style="margin-top:8px;font-size:12px;color:#666;max-height:140px;overflow:auto;"></div>
@@ -43,7 +41,6 @@
 <div id="viewer-container"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
-
 <script type="importmap">
 {
   "imports": {
@@ -57,7 +54,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ====================== Marching‑Cubes查表 ======================
 const edgeTable = new Uint16Array([
 0x0,0x109,0x203,0x30a,0x406,0x50f,0x605,0x70c,0x80c,0x905,0xa0f,0xb06,0xc0a,0xd03,0xe09,0xf00,
 0x190,0x99,0x393,0x29a,0x596,0x49f,0x795,0x69c,0x99c,0x895,0xb9f,0xa96,0xd9a,0xc93,0xf99,0xe90,
@@ -76,6 +72,7 @@ const edgeTable = new Uint16Array([
 0xe90,0xf99,0xc93,0xd9a,0xa96,0xb9f,0x895,0x99c,0x69c,0x795,0x49f,0x596,0x29a,0x393,0x99,0x190,
 0xf00,0xe09,0xd03,0xc0a,0xb06,0xa0f,0x905,0x80c,0x70c,0x605,0x50f,0x406,0x30a,0x203,0x109,0x0
 ]);
+
 const triTable = new Int8Array([
 -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
 0,8,3,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -205,11 +202,9 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
         [0,4],[1,5],[2,6],[3,7]
     ];
     function lerp(v0,v1,t){return v0+t*(v1-v0);}
-    // 修复索引：W=cols，H=rows，volumeData[z*W*H + y*W +x]
     function get(x,y,z){
         if(x<0||x>=W||y<0||y>=H||z<0||z>=D) return -10000;
-        const index = z * W * H + y * W + x;
-        return volumeData[index];
+        return volumeData[z*W*H + y*W + x];
     }
 
     for(let z=0;z<D-1;z++){
@@ -217,38 +212,21 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
             for(let x=0;x<W-1;x++){
                 const v=new Array(8);
                 for(let i=0;i<8;i++){
-                    const cx=x+corner[i][0],cy=y+corner[i][1],cz=z+corner[i][2];
-                    v[i]=get(cx,cy,cz);
+                    v[i]=get(x+corner[i][0], y+corner[i][1], z+corner[i][2]);
                 }
                 let cube=0;
-                if(invertThreshold){
-                    if(v[0]<isolevel)cube|=1;
-                    if(v[1]<isolevel)cube|=2;
-                    if(v[2]<isolevel)cube|=4;
-                    if(v[3]<isolevel)cube|=8;
-                    if(v[4]<isolevel)cube|=16;
-                    if(v[5]<isolevel)cube|=32;
-                    if(v[6]<isolevel)cube|=64;
-                    if(v[7]<isolevel)cube|=128;
-                }else{
-                    if(v[0]>isolevel)cube|=1;
-                    if(v[1]>isolevel)cube|=2;
-                    if(v[2]>isolevel)cube|=4;
-                    if(v[3]>isolevel)cube|=8;
-                    if(v[4]>isolevel)cube|=16;
-                    if(v[5]>isolevel)cube|=32;
-                    if(v[6]>isolevel)cube|=64;
-                    if(v[7]>isolevel)cube|=128;
+                for(let i=0;i<8;i++){
+                    const inside = invertThreshold ? (v[i]<isolevel) : (v[i]>isolevel);
+                    if(inside) cube |= (1<<i);
                 }
                 const bits=edgeTable[cube];
                 if(bits===0) continue;
                 const pos=new Array(12);
                 for(let ei=0;ei<12;ei++){
                     if((bits&(1<<ei))!==0){
-                        const i0=edgeVert[ei][0];
-                        const i1=edgeVert[ei][1];
+                        const i0=edgeVert[ei][0], i1=edgeVert[ei][1];
                         const t=(isolevel-v[i0])/(v[i1]-v[i0]);
-                        const p0=corner[i0],p1=corner[i1];
+                        const p0=corner[i0], p1=corner[i1];
                         pos[ei]=[
                             lerp(x+p0[0],x+p1[0],t),
                             lerp(y+p0[1],y+p1[1],t),
@@ -256,13 +234,15 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
                         ];
                     }
                 }
-                for(let ti=0;triTable[ti]!==-1;ti+=3){
-                    const a=triTable[ti],b=triTable[ti+1],c=triTable[ti+2];
-                    const va=pos[a],vb=pos[b],vc=pos[c];
+                // ✅ 修复：triTable 按 cube*16 偏移访问
+                const baseOffset = cube*16;
+                for(let ti=0; triTable[baseOffset+ti]!==-1; ti+=3){
+                    const a=triTable[baseOffset+ti];
+                    const b=triTable[baseOffset+ti+1];
+                    const c=triTable[baseOffset+ti+2];
+                    const va=pos[a], vb=pos[b], vc=pos[c];
                     const base=vert.length/3;
-                    vert.push(va[0],va[1],va[2]);
-                    vert.push(vb[0],vb[1],vb[2]);
-                    vert.push(vc[0],vc[1],vc[2]);
+                    vert.push(va[0],va[1],va[2], vb[0],vb[1],vb[2], vc[0],vc[1],vc[2]);
                     idx.push(base,base+1,base+2);
                 }
             }
@@ -310,26 +290,16 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     console.log("HU范围 min:",minHu,"max:",maxHu);
     const isoThresh = Number(huSlider.value);
     const invert = invCheck.checked;
-    statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh} 反转:${invert}`;
+    statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh}`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    let countOver=0;
-    for(let i=0;i<data.length;i++){
-        if(data[i]>isoThresh) countOver++;
-    }
-    console.log(`大于阈值${isoThresh}体素数量：${countOver} / ${data.length}`);
-
-    // ✅复原调用参数 width(cols), height(rows), depth(slice数)
     const geo = marchingCubes(width, height, depth, data, isoThresh, invert);
-
     if(!geo){
-        statusText.innerText = `重建完成，顶点:0 ⚠️阈值不合适，大于阈值体素${countOver}，无模型，请调整HU阈值`;
+        statusText.innerText = `重建完成，顶点:0 ⚠️无模型，请调整HU阈值`;
         return;
     }
-
     const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
     volumeMesh = new THREE.Mesh(geo,mat);
-
     volumeMesh.scale.set(pixelSpacing[0], pixelSpacing[1], sliceThickness);
     geo.computeBoundingBox();
     geo.computeBoundingSphere();
@@ -337,13 +307,10 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     const center = new THREE.Vector3();
     box.getCenter(center);
     volumeMesh.position.copy(center).multiplyScalar(-1);
-
     scene.add(volumeMesh);
-
     const vertCount = geo.attributes.position?.count ?? 0;
     statusText.innerText = `重建完成，顶点:${vertCount}`;
     console.log("顶点数量:",vertCount);
-
     const sphere = geo.boundingSphere;
     const radius = sphere.radius * Math.max(pixelSpacing[0],pixelSpacing[1],sliceThickness);
     camera.position.set(radius*1.5, radius*1.5, radius*1.5);
@@ -373,24 +340,20 @@ fileInput.onchange = async (e)=>{
     logText.innerText='';
     const sliceList = [];
     let dimX=null,dimY=null;
-
     for(const f of files){
         try{
             const arrayBuf = await f.arrayBuffer();
             const byteArray = new Uint8Array(arrayBuf);
             const dataSet = dicomParser.parseDicom(byteArray);
-
             const rows = dataSet.uint16('x00280010');
             const cols = dataSet.uint16('x00280011');
             const pixelDataElement = dataSet.elements.x7fe00010;
-
             if(!rows || !cols || !pixelDataElement || !pixelDataElement.length){
                 logText.innerText += `跳过:${f.name} 无像素\n`;
                 continue;
             }
             dimX = cols;
             dimY = rows;
-
             const spacingStr = dataSet.string('x00280030');
             if(spacingStr){
                 const sp = spacingStr.split('\\').map(Number);
@@ -398,20 +361,17 @@ fileInput.onchange = async (e)=>{
             }
             const thick = dataSet.floatString('x00180050');
             if(thick) sliceThickness=thick;
-
             const pixelBuffer = new Uint16Array(
                 byteArray.buffer,
                 pixelDataElement.dataOffset,
                 pixelDataElement.length / 2
             );
-
             const slope = dataSet.floatString('x00281053') ?? 1.0;
             const intercept = dataSet.floatString('x00281052') ?? 0.0;
             const huArr = new Float32Array(pixelBuffer.length);
             for(let i=0;i<pixelBuffer.length;i++){
                 huArr[i] = pixelBuffer[i] * slope + intercept;
             }
-
             const posZ = dataSet.floatString('x00200032',2) ?? sliceList.length;
             sliceList.push({posZ: posZ, huData: huArr});
         }catch(err){
@@ -419,7 +379,6 @@ fileInput.onchange = async (e)=>{
             console.warn('文件解析失败',f.name,err);
         }
     }
-
     if(sliceList.length===0){
         statusText.innerText = "没有读到有效DICOM图像！";
         alert("选中的文件全部不含像素图像，请选择CT切片dcm");
@@ -430,9 +389,7 @@ fileInput.onchange = async (e)=>{
     const totalVoxels = dimX * dimY * depth;
     const volumeData = new Float32Array(totalVoxels);
     for(let z=0; z<depth; z++){
-        const slice = sliceList[z];
-        const offset = z * dimX * dimY;
-        volumeData.set(slice.huData, offset);
+        volumeData.set(sliceList[z].huData, z * dimX * dimY);
     }
     dicomVolume = {data: volumeData, width: dimX, height: dimY, depth: depth};
     statusText.innerText = `加载完成: ${dimX}×${dimY}×${depth}`;
@@ -466,7 +423,6 @@ function initThree(){
     }
     animate();
 }
-
 initThree();
 console.log("✅ dicom‑parser已加载");
 </script>

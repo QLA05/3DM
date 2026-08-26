@@ -32,8 +32,8 @@
     </div>
 
     <div class="control-block">
-        <div>等值面HU阈值:<span id="hu-val">250</span></div>
-        <input type="range" id="hu-slider" min="-500" max="1200" value="250">
+        <div>等值面HU阈值:<span id="hu-val">81</span></div>
+        <input type="range" id="hu-slider" min="-500" max="1200" value="81">
         <label><input type="checkbox" id="inv-check">反转阈值(小于阈值为物体)</label>
         <button class="btn blue" id="rebuildIsoBtn">重新重建</button>
         <div id="status-text">等待上传DICOM</div>
@@ -220,7 +220,6 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel,invertThreshold=fal
                     v[i]=get(cx,cy,cz);
                 }
                 let cube=0;
-                // 支持反转阈值
                 if(invertThreshold){
                     if(v[0]<isolevel)cube|=1;
                     if(v[1]<isolevel)cube|=2;
@@ -276,7 +275,6 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel,invertThreshold=fal
     return geo;
 }
 
-// 大数组求min/max
 function getMinMax(arr){
     let min=arr[0],max=arr[0];
     for(let i=1;i<arr.length;i++){
@@ -314,14 +312,15 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     statusText.innerText = `重建中 HU[${minHu.toFixed(0)}~${maxHu.toFixed(0)}],阈值${isoThresh} 反转:${invert}`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    // 统计数组内大于阈值的体素数量（调试关键）
     let countOver=0;
     for(let i=0;i<data.length;i++){
         if(data[i]>isoThresh) countOver++;
     }
     console.log(`大于阈值${isoThresh}体素数量：${countOver} / ${data.length}`);
 
-    const geo = marchingCubes(width,height,depth,data,isoThresh,invert);
+    // =========关键修复：交换 width height=========
+    const geo = marchingCubes(height, width, depth, data, isoThresh, invert);
+
     if(!geo){
         statusText.innerText = `重建完成，顶点:0 ⚠️阈值不合适，大于阈值体素${countOver}，无模型，请调整HU阈值`;
         return;

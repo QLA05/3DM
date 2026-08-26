@@ -225,7 +225,9 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
                 for(let ei=0;ei<12;ei++){
                     if((bits&(1<<ei))!==0){
                         const i0=edgeVert[ei][0], i1=edgeVert[ei][1];
-                        const t=(isolevel-v[i0])/(v[i1]-v[i0]);
+                        const denom = v[i1]-v[i0];
+                        if(Math.abs(denom) < 1e-6) continue;
+                        const t=(isolevel-v[i0])/denom;
                         const p0=corner[i0], p1=corner[i1];
                         pos[ei]=[
                             lerp(x+p0[0],x+p1[0],t),
@@ -234,12 +236,13 @@ function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
                         ];
                     }
                 }
-                // ✅ 修复：triTable 按 cube*16 偏移访问
                 const baseOffset = cube*16;
                 for(let ti=0; triTable[baseOffset+ti]!==-1; ti+=3){
                     const a=triTable[baseOffset+ti];
                     const b=triTable[baseOffset+ti+1];
                     const c=triTable[baseOffset+ti+2];
+                    // ✅防御：跳过pos未赋值的边，防止undefined[0]报错
+                    if(!pos[a] || !pos[b] || !pos[c]) continue;
                     const va=pos[a], vb=pos[b], vc=pos[c];
                     const base=vert.length/3;
                     vert.push(va[0],va[1],va[2], vb[0],vb[1],vb[2], vc[0],vc[1],vc[2]);

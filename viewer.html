@@ -192,7 +192,7 @@ const triTable = new Int8Array([
 7,11,0,7,6,11,6,10,11,-1,-1,-1,-1,-1,-1,-1
 ]);
 
-function marchingCubes(dataW,dataH,dataD,volumeData,isolevel,invertThreshold=false){
+function marchingCubes(W,H,D,volumeData,isolevel,invertThreshold=false){
     const vert=[];
     const idx=[];
     const corner=[
@@ -205,15 +205,16 @@ function marchingCubes(dataW,dataH,dataD,volumeData,isolevel,invertThreshold=fal
         [0,4],[1,5],[2,6],[3,7]
     ];
     function lerp(v0,v1,t){return v0+t*(v1-v0);}
+    // 修复索引：W=cols，H=rows，volumeData[z*W*H + y*W +x]
     function get(x,y,z){
-        if(x<0||x>=dataW||y<0||y>=dataH||z<0||z>=dataD) return -10000;
-        const idx = z * dataW * dataH + y * dataW + x;
-        return volumeData[idx];
+        if(x<0||x>=W||y<0||y>=H||z<0||z>=D) return -10000;
+        const index = z * W * H + y * W + x;
+        return volumeData[index];
     }
 
-    for(let z=0;z<dataD-1;z++){
-        for(let y=0;y<dataH-1;y++){
-            for(let x=0;x<dataW-1;x++){
+    for(let z=0;z<D-1;z++){
+        for(let y=0;y<H-1;y++){
+            for(let x=0;x<W-1;x++){
                 const v=new Array(8);
                 for(let i=0;i<8;i++){
                     const cx=x+corner[i][0],cy=y+corner[i][1],cz=z+corner[i][2];
@@ -318,8 +319,8 @@ document.getElementById('rebuildIsoBtn').onclick = async ()=>{
     }
     console.log(`大于阈值${isoThresh}体素数量：${countOver} / ${data.length}`);
 
-    // =========关键修复：交换 width height=========
-    const geo = marchingCubes(height, width, depth, data, isoThresh, invert);
+    // ✅复原调用参数 width(cols), height(rows), depth(slice数)
+    const geo = marchingCubes(width, height, depth, data, isoThresh, invert);
 
     if(!geo){
         statusText.innerText = `重建完成，顶点:0 ⚠️阈值不合适，大于阈值体素${countOver}，无模型，请调整HU阈值`;

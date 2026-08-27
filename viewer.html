@@ -192,17 +192,17 @@ const triTable = new Int8Array([${Array.from(triTable).join(',')}]);
 self.onmessage = async (e)=>{
     const {W,H,D,volumeData,isolevel,invertThreshold,downSample} = e.data;
     const ds = downSample;
+    // ✅ 只在XY降采样，Z保持全部层数
     const w = Math.floor(W/ds);
     const h = Math.floor(H/ds);
-    const d = Math.floor(D/ds);
+    const d = D;
     const sampled = new Float32Array(w*h*d);
     for(let z=0;z<d;z++){
         for(let y=0;y<h;y++){
             for(let x=0;x<w;x++){
                 const ox = x*ds;
                 const oy = y*ds;
-                const oz = z*ds;
-                sampled[z*w*h + y*w + x] = volumeData[oz*W*H + oy*W + ox];
+                sampled[z*w*h + y*w + x] = volumeData[z*W*H + oy*W + ox];
             }
         }
     }
@@ -215,47 +215,45 @@ self.onmessage = async (e)=>{
         if(x<0||x>=w||y<0||y>=h||z<0||z>=d) return -10000;
         return sampled[z*w*h + y*w + x];
     }
-    const chunkZ = 2;
-    for(let zChunk=0; zChunk < d-1; zChunk += chunkZ){
-        for(let z=zChunk; z < Math.min(zChunk+chunkZ, d-1); z++){
-            for(let y=0;y<h-1;y++){
-                for(let x=0;x<w-1;x++){
-                    const v=new Array(8);
-                    for(let i=0;i<8;i++){
-                        v[i]=get(x+corner[i][0], y+corner[i][1], z+corner[i][2]);
+    for(let z=0;z<d-1;z++){
+        for(let y=0;y<h-1;y++){
+            for(let x=0;x<w-1;x++){
+                const v=new Array(8);
+                for(let i=0;i<8;i++){
+                    v[i]=get(x+corner[i][0], y+corner[i][1], z+corner[i][2]);
+                }
+                let cube=0;
+                for(let i=0;i<8;i++){
+                    const inside = invertThreshold ? (v[i]<isolevel) : (v[i]>isolevel);
+                    if(inside) cube |= (1<<i);
+                }
+                const bits=edgeTable[cube];
+                if(bits===0) continue;
+                const pos=new Array(12);
+                for(let ei=0;ei<12;ei++){
+                    if((bits&(1<<ei))!==0){
+                        const i0=edgeVert[ei][0], i1=edgeVert[ei][1];
+                        const denom = v[i1]-v[i0];
+                        if(Math.abs(denom) < 1e-6) continue;
+                        const t=(isolevel-v[i0])/denom;
+                        const p0=corner[i0], p1=corner[i1];
+                        pos[ei]=[lerp(x+p0[0],x+p1[0],t),lerp(y+p0[1],y+p1[1],t),lerp(z+p0[2],z+p1[2],t)];
                     }
-                    let cube=0;
-                    for(let i=0;i<8;i++){
-                        const inside = invertThreshold ? (v[i]<isolevel) : (v[i]>isolevel);
-                        if(inside) cube |= (1<<i);
-                    }
-                    const bits=edgeTable[cube];
-                    if(bits===0) continue;
-                    const pos=new Array(12);
-                    for(let ei=0;ei<12;ei++){
-                        if((bits&(1<<ei))!==0){
-                            const i0=edgeVert[ei][0], i1=edgeVert[ei][1];
-                            const denom = v[i1]-v[i0];
-                            if(Math.abs(denom) < 1e-6) continue;
-                            const t=(isolevel-v[i0])/denom;
-                            const p0=corner[i0], p1=corner[i1];
-                            pos[ei]=[lerp(x+p0[0],x+p1[0],t),lerp(y+p0[1],y+p1[1],t),lerp(z+p0[2],z+p1[2],t)];
-                        }
-                    }
-                    const baseOffset = cube*16;
-                    for(let ti=0; triTable[baseOffset+ti]!==-1; ti+=3){
-                        const a=triTable[baseOffset+ti];
-                        const b=triTable[baseOffset+ti+1];
-                        const c=triTable[baseOffset+ti+2];
-                        if(!pos[a]||!pos[b]||!pos[c]) continue;
-                        const va=pos[a], vb=pos[b], vc=pos[c];
-                        const base=vert.length/3;
-                        vert.push(va[0],va[1],va[2], vb[0],vb[1],vb[2], vc[0],vc[1],vc[2]);
-                        idx.push(base,base+1,base+2);
-                    }
+                }
+                const baseOffset = cube*16;
+                for(let ti=0; triTable[baseOffset+ti]!==-1; ti+=3){
+                    const a=triTable[baseOffset+ti];
+                    const b=triTable[baseOffset+ti+1];
+                    const c=triTable[baseOffset+ti+2];
+                    if(!pos[a]||!pos[b]||!pos[c]) continue;
+                    const va=pos[a], vb=pos[b], vc=pos[c];
+                    const base=vert.length/3;
+                    vert.push(va[0],va[1],va[2], vb[0],vb[1],vb[2], vc[0],vc[1],vc[2]);
+                    idx.push(base,base+1,base+2);
                 }
             }
         }
+        // 每算完一层Z让出事件循环，防止Worker卡死
         await new Promise(r=>setTimeout(r,0));
     }
     self.postMessage({vert, idx, w,h,d, ds});
@@ -299,8 +297,8 @@ rebuildBtn.onclick = async ()=>{
     statusText.innerText = `后台重建中，请等待...`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    // 降采样4，512→64，降低计算量，JS可以跑完
-    const downSample = 8;
+    // XY降采样4倍，Z不降
+    const downSample = 4;
 
     if(mcWorker) mcWorker.terminate();
     mcWorker = createMCWorker();
@@ -321,7 +319,7 @@ rebuildBtn.onclick = async ()=>{
         rebuildBtn.disabled = false;
 
         if(vert.length ===0){
-            statusText.innerText = `重建完成，顶点:0 ⚠️调高HU阈值`;
+            statusText.innerText = `重建完成，顶点:0 ⚠️调整HU阈值（骨骼建议200-400）`;
             return;
         }
         const geo=new THREE.BufferGeometry();
@@ -331,7 +329,8 @@ rebuildBtn.onclick = async ()=>{
 
         const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
         volumeMesh = new THREE.Mesh(geo,mat);
-        volumeMesh.scale.set(pixelSpacing[0]*ds, pixelSpacing[1]*ds, sliceThickness*ds);
+        // XY乘降采样系数，Z用原始sliceThickness
+        volumeMesh.scale.set(pixelSpacing[0]*ds, pixelSpacing[1]*ds, sliceThickness);
         geo.computeBoundingBox();
         geo.computeBoundingSphere();
         const box = geo.boundingBox;
@@ -343,7 +342,7 @@ rebuildBtn.onclick = async ()=>{
         statusText.innerText = `重建完成，顶点:${vertCount}`;
         console.log("顶点数量:",vertCount);
         const sphere = geo.boundingSphere;
-        const radius = sphere.radius * Math.max(pixelSpacing[0]*ds,pixelSpacing[1]*ds,sliceThickness*ds);
+        const radius = sphere.radius * Math.max(pixelSpacing[0]*ds, pixelSpacing[1]*ds, sliceThickness);
         camera.position.set(radius*1.5, radius*1.5, radius*1.5);
         controls.target.set(0,0,0);
         controls.update();

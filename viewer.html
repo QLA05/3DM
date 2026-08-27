@@ -192,7 +192,6 @@ const triTable = new Int8Array([${Array.from(triTable).join(',')}]);
 self.onmessage = async (e)=>{
     const {W,H,D,volumeData,isolevel,invertThreshold,downSample} = e.data;
     const ds = downSample;
-    // ✅ 只在XY降采样，Z保持全部层数
     const w = Math.floor(W/ds);
     const h = Math.floor(H/ds);
     const d = D;
@@ -215,6 +214,7 @@ self.onmessage = async (e)=>{
         if(x<0||x>=w||y<0||y>=h||z<0||z>=d) return -10000;
         return sampled[z*w*h + y*w + x];
     }
+    // 每处理完Z层，让出一次事件循环，缓解阻塞
     for(let z=0;z<d-1;z++){
         for(let y=0;y<h-1;y++){
             for(let x=0;x<w-1;x++){
@@ -253,7 +253,6 @@ self.onmessage = async (e)=>{
                 }
             }
         }
-        // 每算完一层Z让出事件循环，防止Worker卡死
         await new Promise(r=>setTimeout(r,0));
     }
     self.postMessage({vert, idx, w,h,d, ds});
@@ -297,8 +296,8 @@ rebuildBtn.onclick = async ()=>{
     statusText.innerText = `后台重建中，请等待...`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    // XY降采样4倍，Z不降
-    const downSample = 4;
+    // 【修改】XY降采样8倍，Z方向不降采样
+    const downSample = 8;
 
     if(mcWorker) mcWorker.terminate();
     mcWorker = createMCWorker();
@@ -319,7 +318,7 @@ rebuildBtn.onclick = async ()=>{
         rebuildBtn.disabled = false;
 
         if(vert.length ===0){
-            statusText.innerText = `重建完成，顶点:0 ⚠️调整HU阈值（骨骼建议200-400）`;
+            statusText.innerText = `重建完成，顶点:0 ⚠️调整HU阈值（骨骼建议200‑400）`;
             return;
         }
         const geo=new THREE.BufferGeometry();
@@ -329,7 +328,6 @@ rebuildBtn.onclick = async ()=>{
 
         const mat = new THREE.MeshPhongMaterial({color:0xdddddd});
         volumeMesh = new THREE.Mesh(geo,mat);
-        // XY乘降采样系数，Z用原始sliceThickness
         volumeMesh.scale.set(pixelSpacing[0]*ds, pixelSpacing[1]*ds, sliceThickness);
         geo.computeBoundingBox();
         geo.computeBoundingSphere();

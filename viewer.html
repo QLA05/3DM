@@ -299,8 +299,8 @@ rebuildBtn.onclick = async ()=>{
     statusText.innerText = `后台重建中，请等待...`;
     if(volumeMesh) scene.remove(volumeMesh);
 
-    // 降采样4，512→128，降低计算量，JS可以跑完
-    const downSample = 4;
+    // 降采样4，512→64，降低计算量，JS可以跑完
+    const downSample = 8;
 
     if(mcWorker) mcWorker.terminate();
     mcWorker = createMCWorker();
